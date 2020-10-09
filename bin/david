@@ -1,0 +1,87 @@
+#!/bin/bash
+
+USAGE="Usage: -i input_file_name -o out_dir -u account -r reference_file -s id_type [-c score_col] [-d id_col] [-t number_of_top_genes] [-v values_used_for_plotting] [-n number_of_items_to_be_plotted] [-f [flag_for_filtering_genes_with_mixed_signs]] [-a category_list]"
+
+while getopts i:o:r:t:v:n:fd:c:x:y:a:s:u: option
+do
+case "${option}"
+in	
+	i) inFile=$OPTARG;; 
+	o) outDir=$OPTARG;; 
+	r) refFile=$OPTARG;;
+	t) topGenes=$OPTARG;;
+	v) value=$OPTARG;;
+	n) nItems=$OPTARG;;
+	f) filter='T';;
+	d) name=$OPTARG;;
+	c) field=$OPTARG;;
+	x) min=$OPTARG;;
+	y) max=$OPTARG;;
+	a) cats=$OPTARG;;
+	s) idtype=$OPTARG;;
+	u) account=$OPTARG;;
+esac
+done
+
+if [ -z $nItems   ]; then nItems=20; fi
+if [ -z $value    ]; then value=pvalue; fi
+if [ -z $name     ]; then name=1; fi
+if [ -z $field    ]; then field=4; fi
+if [ -z $min      ]; then min=3; fi
+if [ -z $max      ]; then max=5; fi
+if [ -z $refFile  ]; then refFile=${inFile%.list.*}.ann; fi
+
+export PATH=`dirname $0`:$PATH
+
+if [[ -z $inFile ]] || [ -z $outDir ] || [[ -z $account ]] || [[ -z $refFile ]] || [[ -z $idtype ]] || [[ -z $value ]] || [[ -z $nItems ]]
+then
+	echo $USAGE
+	exit 1
+fi
+
+dir=`dirname $0`
+in=`basename $inFile`
+in=${in%.txt}
+temp=${TMPDIR-/tmp}/david.$$
+
+if [[ -z $filter ]];
+then
+	grep -v '^#' $inFile > $temp.tmp || exit $?
+else
+	echo "Filtering genes with different signs"
+	awk "{if((\$$min <0 && \$$max <0) || (\$$min >0 && \$$max >0)) print \$0}" $inFile > $temp.tmp || exit $?
+fi
+
+# For differential expression or differential methylation
+# Annotation list
+if [ -z "$cats" ]
+then
+	annotation=("GOTERM_MF_FAT" "GOTERM_BP_FAT" "PANTHER_PATHWAY" "OMIM_DISEASE" "REACTOME_PATHWAY" "UCSC_TFBS" "KEGG_PATHWAY" "BIND" "DIP")
+else
+	annotation=(`echo $cats | sed 's/,/ /g'`)
+fi
+
+# Extracting top genes
+if [ -z "$topGenes" ]
+then
+	cat $temp.tmp
+else
+	sort -nr -k $field $temp.tmp | head -n $topGenes
+fi | cut -f $name | convertID.pl -q -c 1 -f 0 -f -1 -v -6 -v -8 -t $refFile -o $temp.did || exit $?
+
+[ -e $outDir ] || mkdir $outDir
+
+# Run David on the extracted list of ids - david annotation for Molecular function and Biological processes
+for ann in ${annotation[@]}
+do
+	outFile="$outDir/$in"
+	if [ ! -z "$topGenes" ]; then outFile="$outFile.top$topGenes"; fi
+	outFile="$outFile.$ann.david"
+	chartReport.pl -a $account -i $temp.did -t $idtype -l $in -c "$ann" -o $outFile || exit $?
+#	chartReport.pl -a $account -i $temp.did -t $idtype -l $in -c "$ann" -o $temp.did2 || exit $?
+#	convertID.pl -c 1 -f -3 -f 5 -v 0 -v -1 -t $refFile $temp.did2 $outDir/$in.top$topGenes.$ann.david || exit $?
+	Rscript $dir/plotDavid.r $outFile $outDir $nItems $value $ann || exit $?
+done        
+
+#rm $temp.did $temp.did2 $temp.tmp
+rm $temp.did $temp.tmp

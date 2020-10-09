@@ -1,0 +1,37 @@
+#!/bin/bash
+
+if [ -z $4 ]
+then
+	echo ref fq_file error occ [qual_type] [arguments]
+	exit -1
+fi
+
+ref=$1
+shift
+in=$1
+shift
+error=$1
+shift
+occ=$1
+shift
+
+
+if file $in | grep -i gzip >& /dev/null
+then
+	temp=${in/.gz/}
+	zcat $in > $temp
+	in=$temp
+fi
+
+echo Start: `date` 1>&2
+
+${PROGRAM_DIR2:+$PROGRAM_DIR2/}/bwa aln $@ -n $error -o $error $ref $in | ${PROGRAM_DIR2:+$PROGRAM_DIR2/}/bwa samse -n $occ $ref - $in || exit $?
+(( ${PIPESTATUS[0]} ==  0 )) || exit $?
+
+echo End: `date` 1>&2
+
+if [ ! -z "$temp" ]
+then
+	rm $temp 1>&2
+fi
+

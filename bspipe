@@ -1,0 +1,2966 @@
+#!/usr/bin/perl -w
+#!/usr/local/bin/perl -w
+#!/bin/perl -w
+
+## Author: Jeong-Hyeon Choi
+## Date: 2010
+
+## BSpipe
+
+my $version = '1.3';
+my ($bedExt) = qw(bed.gz);
+my ($sRefName, $sRefFa, $sRefLen, $sRefC, $sRefG, $sRrbs) = qw(ref seq length tc ag fix);
+my ($sMapPro, $sMapWatson, $sMapCreek, $sMapInd, $sMapQ33, $sMapQ64) = qw(PROGRAM WATSON CREEK INDEX PHRED33 PHRED64);
+my ($sRrbsName, $sRrbsSite, $sRrbsFix) = qw(name site fix);
+my ($sGridCom) = ('common');
+my ($samtools, $bsmapper, $bsindex, $rrbsBed, $merge_bed, $merge_sam_summary, $merge_clean, $fq_trim, $fq_split) = qw(samtools bsmapper bsindex rrbs_bed.pl merge_bed.pl merge_sam_summary.pl merge_clean.pl fq_trim.pl fq_splitByNumber);
+my ($methylation_call, $join_methylation, $split_methylation, $window_methylation, $annotate, $david, $gsea, $correlation, $groupMet, $diff1, $diff2, $pca, $qdmr, $bsmooth, $dmr, $clustering, $visualization, $cpgbox, $cpgmps, $prepare_sample, $bsqc, $mcqc, $methclone, $methcloneEncode, $mlogit) = qw(methylation_call join_methylation split_methylation.pl window_methylation annotate david gsea correlation group_met.pl diff_met.pl diff_met pca qdmr bsmooth stattest clustering vis drawCpg.pl cpgmps prepareSample.pl bsqc mcqc.r methclone methcloneEncode.pl multinom.r);
+my ($batCmd, $mapCmd, $metCmd, $merCmd, $joiCmd, $splCmd, $corCmd, $winCmd, $feaCmd, $dmrCmd, $disCmd,  $groCmd,$difCmd, $cluCmd, $annCmd, $visCmd, $davCmd, $gseCmd, $indCmd, $qdmCmd, $bsmCmd, $paiCmd, $pcaCmd, $boxCmd, $cpgCmd, $samCmd, $bsqCmd, $mcqCmd, $mclCmd, $mloCmd) = ('batch', 'mapping', 'methylation', 'merge', 'join', 'split', 'correlate', 'window', 'feature', 'dmr', 'dispersion', 'group', 'diff', 'clustering', 'annotate', 'vis', 'david', 'gsea', 'index', 'qdmr', 'bsmooth', 'pair', 'pca', 'box', 'cpgmps', 'sam', 'bsqc', 'mcqc', 'methclone', 'mlogit');
+my ($dmrAll, $dmrSite, $dmrWindow, $dmrNone) = qw(all site window none);
+my ($bamBit, $bedBit, $sumBit, $logBit, $allBit) = (1, 2, 4, 8, 15);
+my $jobLogFile = '_bspipe_job';
+
+my $accErrMsg = "Account is not specified\n";
+my $annConfErrMsg = "Annotation configuration file is not specified\n";
+my $rrbsErrMsg = "Both RRBS name and configuration file are not specified\n";
+my $dmrLevelErrMsg = "DMR level is not specified\n";
+my $dmrWrongErrMsg = "%s is not supported for -dmr\n";
+my $featConfErrMsg = "Feature configuration file is not specified\n";
+my $idTypeErrMsg = "ID type is not specified\n";
+my $inDirErrMsg = "Input directory is not specified\n";
+my $inFileErrMsg = "Input file is not specified\n";
+my $inAnotherErrMsg = "Another input file is not specified\n";
+my $inMapErrMsg = "Input file or sample configuration is not specified\n";
+my $inFilesErrMsg = "Input files are not specified\n";
+my $mapConfErrMsg = "Mapping configuration file is not specified\n";
+my $inBsqcErrMsg = "Mapping directory or BAM files are not specified\n";
+my $inMcqcErrMsg = "Mapping directory or BED files are not specified\n";
+my $inGmtErrMsg = "GMT files are not specified\n";
+my $gseaJarErrMsg = "GSEA JAR file is not specified\n";
+my $outDirErrMsg = "Output directory is not specified\n";
+my $outFileErrMsg = "Output file is not specified\n";
+my $refConfErrMsg = "Reference configuration file is not specified\n";
+my $samConfErrMsg = "Sample configuration file is not specified\n";
+my $groupInfoErrMsg = "Sample configuration file or group information file is not specified\n";
+my $pairConfErrMsg = "Pair configuration file is not specified\n";
+my $pairInfoErrMsg = "Pair configuration file or two sample names is not specified\n";
+my $winErrMsg = "Window size is not specified\n";
+my $stepErrMsg = "Step size is not specified\n";
+my $inMerErrMsg1 = "Input directory and sample configuration file are not specified\n";
+my $inMerErrMsg2 = "Input files and output preifx are not specified\n";
+my $urlErrMsg = "URL for bam and/or bigwig files should be specivied with -url\n";
+my $inVisErrMsg = "Input directory or files is not specified\n";
+my $visTypeErrMsg = "No file type is specified\n";
+my $samNameErrMsg = "Sample name is not specified\n";
+
+use strict;
+use Getopt::Long qw(:config no_ignore_case);
+use File::Basename;
+use File::Which;
+use File::Spec;
+use Cwd 'abs_path';
+use POSIX qw(SIGKILL SIGINT SIGTERM WNOHANG ceil);
+
+my $home = abs_path(dirname(-l $0 ? File::Spec->rel2abs(readlink($0), dirname($0)) : $0));
+$ENV{PATH} = "$home:$home/bin:$ENV{PATH}";
+
+my ($helpFlag, $inDir, $outDir, $verbose, $debug, $leave, $quiet, $force, $tmpDir);
+my ($gridConf, $mapConf, $samConf, $samBase, $refConf, $refBase, $rrbsConf, $rrbsFilter, $project, $thread, $sge, $pairConf);
+my ($minReadLen, $qual5, $qual3, $trim5, $trim3);
+my ($mapMode, $nseq, $minBaseQual, $minMapQual, $errRate, $clipRate, $occ, $metCov, $bases);
+my (%hydroxy, $tabseq, $oxbsseq);
+my ($inAnother, @merFiles, $groupFlag, $bedFlag, $logFlag, $sumFlag);
+my ($featConf, $featBase, $window, $step);
+my (@annFiles, $fileExt, $annConf, $annBase, $stream, $scoreCol, $geneSum, $infoFlag, $hyperCut, $hypoCut, $priority);
+my (@davFiles, $topGenes, $nItem, $davValue, $idType, $davCats, $showID, $showCat, $davAccount);
+my (@gseaFiles, $gseaMem, @gmtFiles, $gseaJar, $gseaMin, $gseaMax, $gseaTop, $gseaPerm, $gseaScore, $gseaNorm);
+my ($spearman, $pearson, $note, $metContext);
+my ($pch, $legend, $scale, $pdfFlag);
+my ($pvalue, $fdr, $metDiff, $sdDiff, $minCpG, $topWindow, $topClust, $ttest, $wilcoxon, $kstest, $raoscott, $fisher, $anova, $vartest, $ansari, $cucconi, $lepage, $pairFlag, $format, $filter, $samFrac, $rpath, $simulation);
+my ($hierarchical, $kmeans, $pam, $cuttree);
+my ($url4ucsc, $bamFlag, $cwigFlag, $mbed, $mwig, $dwig);
+my ($distMethod, $linkMethod, $width, $height);
+my ($qdmrSd, $qdmrMem);
+my ($smwin, $smgap, $smloc, $smtop, $smlen, $smcut, $smquan);
+my ($cpgmps_ms, $cpgmps_mc, $cpgmps_us, $cpgmps_uc, $cpgmps_dc, $cpgmps_v, $cpgmpsMem);
+my ($methclonePath, $methcloneCov, $methcloneDist, $methcloneDiff);
+my ($mlogitCov, $mlogitDist);
+my ($boxTar, $boxRef, $boxStrand, $boxId, @boxShow, $boxBed, $boxPercent, $boxNoCoord);
+my ($name1, $name2);
+my ($groupFile);
+my ($fullFlag, $regexForGrp);
+my (@bsqcFiles, $keyPos, $qcRedraw);
+my (@mcqcFiles);
+my ($dmrLevel, $fromJoin, $fromProfile, $fromDmr, $postDmr);
+my ($argFile, $ignore);
+my ($jobLogHandle, %jobStatus, $resume, $noJobLog);
+
+Getopt::Long::Configure("pass_through", "no_auto_abbrev");
+GetOptions(
+	"arg|argument=s" => \$argFile,
+	"ignore"         => \$ignore,
+	"verbose+"       => \$verbose,
+) || die "\n";
+Getopt::Long::Configure("no_pass_through", "auto_abbrev");
+
+loadParameter($argFile, $ignore) if $argFile;
+
+my $process = $$;
+my $wrong;
+my ($command) = fullCommand(shift @ARGV);
+$note = 1;
+
+GetOptions(
+	"h|?|help"     => \$helpFlag,   
+	"i|inut=s"     => \$inDir,
+	"j=s"          => \$inAnother,
+	"o|output=s"   => \$outDir,
+	"verbose+"     => \$verbose,
+	"quiet"        => \$quiet,
+	"debug"        => \$debug,
+	"leave"        => \$leave,
+	"force"        => \$force,
+	"resume"       => \$resume,
+	"t|thread=s"   => \$thread,
+	"sge"          => \$sge,
+	"tmp=s"        => \$tmpDir,
+	"g|gc=s"       => \$gridConf,
+	"m|mc=s"       => \$mapConf,
+	"s|sc=s"       => \$samConf,
+	"S|sb=s"       => \$samBase,
+	"r|rc=s"       => \$refConf,
+	"R|rb=s"       => \$refBase,
+	"b|bc=s"       => \$rrbsConf,
+	"discard=s"    => \$rrbsFilter,
+	"M|mm=s"       => \$mapMode,
+	"ns|nseq=i"    => \$nseq,
+	"bq=f"         => \$minBaseQual,
+	"mq=f"         => \$minMapQual,
+	"e|error=f"    => \$errRate,
+	"clip=f"       => \$clipRate,
+	"occurrence=i" => \$occ,
+	"c|coverage=i" => \$metCov,
+	"nt=s"         => \$bases,
+	"p|project=s"  => \$project,
+	"pearson!"     => \$pearson,
+	"spearman!"    => \$spearman,
+	"cc=s"         => \$metContext,
+	"f|fc=s"       => \$featConf,
+	"F|fb=s"       => \$featBase,
+	"w|window=i"   => \$window,
+	"st|step=i"    => \$step,
+	"md=f"         => \$metDiff,
+	"sd=f"         => \$sdDiff,
+	"cw=f"         => \$minCpG,
+	"format=s"     => \$format,
+	"simulation:i" => \$simulation,
+	"filter!"      => \$filter,
+	"fraction=f"   => \$samFrac,
+	"pvalue=f"     => \$pvalue,
+	"fdr=f"        => \$fdr,
+	"tw=f"         => \$topWindow,
+	"tc=f"         => \$topClust,
+	"ttest!"       => \$ttest,
+	"wilcoxon!"    => \$wilcoxon,
+	"kstest!"      => \$kstest,
+	"raoscott!"    => \$raoscott,
+	"fisher!"      => \$fisher,
+	"anova!"       => \$anova,
+	"vartest!"     => \$vartest,
+	"ansari!"      => \$ansari,
+	"cucconi!"     => \$cucconi,
+	"lepage!"      => \$lepage,
+	"rpath=s"      => \$rpath,
+	"a|ac=s"       => \$annConf,
+	"A|ab=s"       => \$annBase,
+	"distance=s"   => \$distMethod,
+	"linkage=s"    => \$linkMethod,
+	"stream=i"     => \$stream,
+	"score=s"      => \$scoreCol,
+	"gene!"        => \$geneSum,
+	"info"         => \$infoFlag,
+	"hyper=f"      => \$hyperCut,
+	"hypo=f"       => \$hypoCut,
+	"priority=s"   => \$priority,
+	"url=s"        => \$url4ucsc,
+	"bam!"         => \$bamFlag,
+	"cwig!"        => \$cwigFlag,
+	"mbed:s"       => \$mbed,
+	"mwig:s"       => \$mwig,
+	"dwig:s"       => \$dwig,
+	"bed!"         => \$bedFlag,
+	"log!"         => \$logFlag,
+	"sum!"         => \$sumFlag,
+	"note!"        => \$note,
+	"width=i"      => \$width,
+	"height=i"     => \$height,
+	"qsd=f"        => \$qdmrSd,
+	"qmem=f"       => \$qdmrMem,
+	"P|pc=s"       => \$pairConf,
+	"paired"       => \$pairFlag,
+	"pch=s"        => \$pch,
+	"legend=s"     => \$legend,
+	"scale=s"      => \$scale,
+	"hierarchical" => \$hierarchical,
+	"kmeans=i"     => \$kmeans,
+	"pam=i"        => \$pam,
+	"pdf"          => \$pdfFlag,
+	"smwindow=i"   => \$smwin,
+	"smgap=i"      => \$smgap,
+	"smloc=i"      => \$smloc,
+	"smtop=i"      => \$smtop,
+	"smlength=i"   => \$smlen,
+	"smcutoff=f"   => \$smcut,
+	"smquantile=f" => \$smquan,
+	"rlen=f"       => \$minReadLen,
+	"qual5=i"      => \$qual5,
+	"qual3=i"      => \$qual3,
+	"trim5=i"      => \$trim5,
+	"trim3=i"      => \$trim3,
+	"target=s"     => \$boxTar,
+	"idfirst"      => \$boxId,
+	"reference=s"  => \$boxRef,
+	"strand"       => \$boxStrand,
+	"save"         => \$boxBed,
+	"nocoord"      => \$boxNoCoord,
+	"percent"      => \$boxPercent,
+	"show=s"       => \@boxShow,
+	"name1=s"      => \$name1,
+	"name2=s"      => \$name2,
+	"gf=s"         => \$groupFile,
+	"group"        => \$groupFlag,
+	"cpgmps_ms=s"  => \$cpgmps_ms,
+	"cpgmps_mc=i"  => \$cpgmps_mc,
+	"cpgmps_us=s"  => \$cpgmps_us,
+	"cpgmps_uc=i"  => \$cpgmps_uc,
+	"cpgmps_dc=i"  => \$cpgmps_dc,
+	"cpgmps_v=f"   => \$cpgmps_v,
+	"cpgmps_mem=i" => \$cpgmpsMem,
+	"full"         => \$fullFlag,
+	"regex=s"      => \$regexForGrp,
+	"tg=i"         => \$topGenes,
+	"nitem=i"      => \$nItem,
+	"dval=s"       => \$davValue,
+	"idtype=s"     => \$idType,
+	"showid"       => \$showID,
+	"category=s"   => \$davCats,
+	"showcat"      => \$showCat,
+	"account=s"    => \$davAccount,
+#	"key=s"        => \$keyPos,
+	"redraw"       => \$qcRedraw,
+	"dmr=s"        => \$dmrLevel,
+	"extension=s"  => \$fileExt,
+	"from-join"    => \$fromJoin,
+	"from-profile" => \$fromProfile,
+	"from-dmr"     => \$fromDmr,
+	"post-dmr!"    => \$postDmr,
+	"gmt=s"        => \@gmtFiles,
+	"gsea_jar=s"   => \$gseaJar,
+	"gsea_mem=f"   => \$gseaMem,
+	"gsea_min=i"   => \$gseaMin,
+	"gsea_max=i"   => \$gseaMax,
+	"gsea_top=i"   => \$gseaTop,
+	"gsea_perm=i"  => \$gseaPerm,
+	"gsea_score=s" => \$gseaScore,
+	"gsea_norm=s"  => \$gseaNorm,
+	"tabseq"       => \$tabseq,
+	"oxbsseq"      => \$oxbsseq,
+	"mc_path=s"    => \$methclonePath,
+	"mc_cov=i"     => \$methcloneCov,
+	"mc_dist=i"    => \$methcloneDist,
+	"mc_diff=i"    => \$methcloneDiff,
+	"ml_cov=i"     => \$mlogitCov,
+	"ml_dist=i"    => \$mlogitDist,
+) || die "\n";
+
+checkOptions();
+
+my (@sams, %grp, %sam2grp, %rep, %ref, %ind, %mapper, %grid, %rrbs, %feat);
+my $orgInDir = $inDir;
+my $orgOutDir = $outDir;
+my %children; # (index, name, cmd, stay)
+my ($batMap, $batMet, $batCor, $batPca, $batWin, $batClu, $batDmr, $batAnn, $batDav, $batGsea);
+
+#setpgrp;
+$SIG{'INT' } = \&catch;
+$SIG{'TERM'} = \&catch;
+$| = 1;
+
+print('Start: ', scalar localtime(), "\n") if !$quiet;
+
+loadMapper($mapConf) if $mapConf;
+loadRrbs($rrbsConf) if $rrbsConf;
+loadSample($samConf) if $samConf;
+loadRef($refConf, 1) if $refConf;
+loadGrid($gridConf) if $gridConf;
+loadFeature($featConf) if $featConf;
+#processJobLog() if !$showID && !$showCat && !$noJobLog;
+
+if    ($command eq $indCmd) { processJobLog(); indexSub();                                }
+elsif ($command eq $batCmd) { processJobLog(); batchSub();                                }
+elsif ($command eq $mapCmd) { processJobLog(); mappingSub();                              }
+elsif ($command eq $metCmd) { processJobLog(); methylationSub();                          }
+elsif ($command eq $paiCmd) { processJobLog(); pairSub();                                 }
+elsif ($command eq $merCmd) { processJobLog(); mergeSub();                                }
+elsif ($command eq $joiCmd) {                  joinSub();                                 }
+elsif ($command eq $splCmd) {                  splitSub();                                }
+elsif ($command eq $groCmd) {                  groupSub();                                }
+elsif ($command eq $difCmd) {                  diffSub();                                 }
+elsif ($command eq $corCmd) {                  correlationSub($inDir, $outDir, $samConf); }
+elsif ($command eq $pcaCmd) {                  pcaSub($inDir, $outDir, $samConf);         }
+elsif ($command eq $cluCmd) {                  clusteringSub($inDir, $outDir, $samConf);  }
+elsif ($command eq $winCmd) {                  windowSub();                               }
+elsif ($command eq $feaCmd) { processJobLog(); featureSub();                              }
+elsif ($command eq $dmrCmd) {                  dmrSub($thread);                           }
+elsif ($command eq $disCmd) {                  dispersionSub($thread);                    }
+elsif ($command eq $annCmd) { processJobLog(); annotationSub();                           }
+elsif ($command eq $davCmd) { processJobLog(); davidSub($force);                          }
+elsif ($command eq $visCmd) { processJobLog(); visualizationSub();                        }
+elsif ($command eq $boxCmd) {                  boxplotSub();                              }
+elsif ($command eq $samCmd) {                  sampleSub();                               }
+elsif ($command eq $bsqCmd) { processJobLog(); bsqcSub();                                 }
+elsif ($command eq $mcqCmd) { processJobLog(); mcqcSub();                                 }
+elsif ($command eq $gseCmd) { processJobLog(); gseaSub($force);                           }
+elsif ($command eq $cpgCmd) {                  cpgmpsSub();                               }
+elsif ($command eq $qdmCmd) {                  qdmrSub();                                 }
+elsif ($command eq $bsmCmd) {                  bsmoothSub();                              }
+elsif ($command eq $mclCmd) { processJobLog(); methcloneSub();                            }
+elsif ($command eq $mloCmd) { processJobLog(); mlogitSub();                               }
+else                        { die "Unsupported command: $command\n";                      }
+
+waitFor();
+system("rm -r $ENV{TMPDIR}") if !$leave;
+print("Done: ", scalar localtime(), "\n\n") if !$quiet;
+
+if ($jobLogHandle)
+{
+	close($jobLogHandle);
+	unlink($jobLogFile);
+}
+
+################################################################################
+sub indexSub
+{
+	die "Not defined program name in $mapConf\n" if !$mapper{$sMapPro};
+	die "Not defined index command in $mapConf for $mapper{$sMapPro}\n" if !$mapper{$sMapInd};
+	indexRef();
+}
+
+sub batchSub
+{
+	$batMap = "$orgOutDir/mapping";
+	$batMet = "$orgOutDir/site.$metCov";
+	$batCor = "$batMet/correlation";
+	$batPca = "$batMet/pca";
+	$batClu = "$batMet/clustering";
+	$batWin = "$orgOutDir/window.$window-$step-$metCov";
+
+	if (!$fromJoin && !$fromProfile && !$fromDmr)
+	{
+		setDirs($batMap);
+		mappingSub();
+		waitFor();
+		setDirs($batMap, $batMap);
+		visualizationSub();
+	}
+
+	if (!$fromProfile && !$fromDmr)
+	{
+		setDirs($batMet, $batMap);
+		joinSub();
+		setDirs($batWin, $batMap);
+		windowSub();
+		waitFor();
+	}
+
+	if (!$fromDmr)
+	{
+		my @types = ('');
+		push(@types, '5mc', '5hmc') if keys %hydroxy;
+		foreach my $t (@types)
+		{
+			correlationSub("$batMet/$project.$metContext.methy.gz", $batCor, $t ? "$batMap/$t.conf" : $samConf, "$project$t.$metContext.methy.gz", 1);
+			pcaSub("$batMet/$project.$metContext.methy.gz", $batPca, $t ? "$batMap/$t.conf" : $samConf, "$project$t.$metContext.methy.gz", 1);
+			clusteringSub("$batMet/$project.$metContext.methy.gz", $batClu, $t ? "$batMap/$t.conf" : $samConf, "$project$t.$metContext.methy.gz", 1);
+		}
+	}
+
+	if ($dmrLevel ne $dmrNone)
+	{
+		my (@batDmrIn, @batDmrOut, $i);
+		foreach my $lev ($dmrLevel eq $dmrAll ? ($dmrSite, $dmrWindow) : $dmrLevel)
+		{
+			my ($region, $base, $ext) = $lev eq $dmrSite ? ('', $batMet, '') : ('win', $batWin, ".$minCpG");
+			if ($fisher || $raoscott)
+			{
+				if ($fisher) { push(@batDmrIn , "$base/fisher$ext"); }
+				else         { push(@batDmrIn , "$base/raoscott$ext"); }
+				push(@batDmrOut, "$base/$project.$metContext$region.nread.gz");
+			}
+			else
+			{
+				if    ($ttest   ) { push(@batDmrIn , "$base/ttest$ext"); }
+				elsif ($wilcoxon) { push(@batDmrIn , "$base/wilcoxon$ext"); }
+				elsif ($kstest  ) { push(@batDmrIn , "$base/kstest$ext"); }
+				elsif ($anova   ) { push(@batDmrIn , "$base/anova$ext"); }
+				else              { push(@batDmrIn , "$base/unknown$ext"); }
+				push(@batDmrOut, "$base/$project.$metContext$region.methy.gz");
+			}
+		}
+
+		for ($i = 0; $i < @batDmrIn; $i++)
+		{
+			setDirs($batDmr = $batDmrIn[$i], $batDmrOut[$i]);
+			parallel($thread, undef, \&dmrSub);
+		}
+		waitFor();
+
+		for ($i = 0; $i < @batDmrIn; $i++)
+		{
+			$batDmr = $batDmrIn[$i];
+			setDirs($batAnn = "$batDmrIn[$i]/annotation");
+			annotationSub();
+		}
+		waitFor();
+
+		if ($postDmr)
+		{
+			for ($i = 0; $i < @batDmrIn; $i++)
+			{
+				$batDmr = $batDmrIn[$i];
+				setDirs($batDav = "$batDmrIn[$i]/david");
+				davidSub(1);
+				if ($gseaJar && @gmtFiles)
+				{
+					setDirs($batDav = "$batDmrIn[$i]/gsea");
+					gseaSub(1);
+				}
+			}
+			waitFor();
+		}
+	}
+}
+
+sub mappingSub
+{
+	if (gridCommand($mapper{$sMapPro}))
+	{
+		die "Please remove " . join(' ', <$bsmapper.o*>) . "\n" if (<$bsmapper.o*>);
+		die "Please remove " . join(' ', <$samtools.o*>) . "\n" if (<$samtools.o*>);
+		die "Please remove " . join(' ', <$merge_bed.o*>) . "\n" if (<$merge_bed.o*>);
+	}
+
+	if (@sams)
+	{
+		my $i;
+		for ($i = 0; $i < @sams-$thread; $i += $thread)
+		{
+			print "[mapping: $i $thread 1]\n";
+			map {parallel($thread, undef, \&mapping, 1, $_->[0], $_->[1], qualType($_->[0]), $outDir, $_->[2])} @sams[$i..$i+$thread-1];
+		}
+		waitFor();
+
+		while ($i < @sams)
+		{
+			my $slot = ceil($thread/(@sams-$i)); # ceiling
+			for ( ; $thread % $slot; $slot++) {}
+			my $no = $thread/$slot;
+			print "[mapping: $i $no $slot]\n";
+			map {parallel($no, undef, \&mapping, $slot, $_->[0], $_->[1], qualType($_->[0]), $outDir, $_->[2])} @sams[$i..$i+$no-1];
+			waitFor();
+			$i += $no;
+		}
+
+		merge_replicate($allBit, $outDir, $outDir);
+		if (keys %hydroxy)
+		{
+			waitFor();
+			hydroxymethylation($outDir, $outDir);
+		}
+	}
+	elsif ($inDir && $mapMode)
+	{
+		mapping($thread, $inDir, $mapMode, qualType($inDir), $outDir);
+	}
+}
+
+sub methylationSub
+{
+	foreach my $inFile (fileGlob($inDir, 'bam', keys %rep))
+	{
+		my $cmd = "$methylation_call $ref{$sRefFa} 1 $minBaseQual $bases $inFile $outDir";
+		parallel($thread, undef, \&run, 'methylation', $cmd);
+	}
+}
+
+sub pairSub
+{
+	die "No input file: $inDir*\n" if (!<$inDir*>);
+	my $outFile = basename($inDir);
+	$outFile =~ s/\..+$//;
+	$outFile =~ s/_R?1$//i;
+	$outFile = "$outDir/$outFile";
+	die "The output prefix $outFile is the same as the input prefix $inDir\n" if $outFile eq ($inDir =~ /^[\/\.]/ ? $inDir : "./$inDir");
+	if (!$inAnother) { $inAnother = $inDir; die "$inDir doesn't have 1 in the end. Please specify the read 2 using -j\n" if $inAnother !~ s/1$/2/; }
+	die "No input file: $inAnother*\n" if (!<$inAnother*>);
+	merge($thread, undef, $allBit, $outFile, $inDir, $inAnother);
+}
+
+sub mergeSub
+{
+	my $bits = combineBits($bamFlag, $bedFlag, $sumFlag, $logFlag);
+	if ($samConf)
+	{
+		$outDir = $inDir if !$outDir;
+		mkdir($outDir) if !-e $outDir;
+		if ($groupFlag) { merge_group    ($bits, $inDir, $outDir); }
+		else            { merge_replicate($bits, $inDir, $outDir); }
+	}
+	else
+	{
+		my $outFile = $outDir;
+		mkdir(dirname($outFile)) if !-e dirname($outFile);
+		merge($thread, undef, $bits, $outFile, @merFiles);
+	}
+}
+
+sub joinSub
+{
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	my $cmd = "$join_methylation" . ($rrbsFilter ? " -rrbs $ref{$rrbsFilter}" : ''). " $metContext $metCov $ref{$sRefFa}.fai $inDir $outDir $project $samConf";
+	parallel($thread, undef, \&run, 'join', $cmd);
+}
+
+sub splitSub
+{
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	my $cmd = "$split_methylation $inDir $outDir";
+	parallel($thread, undef, \&run, 'split', $cmd);
+}
+
+sub groupSub
+{
+	my $cmd = "$groupMet $inDir $outDir";
+	if    ($samConf  ) { $cmd .= " -g $samConf -conf"; }
+	elsif ($groupFile) { $cmd .= " -g $groupFile"; }
+	run('group', $cmd);
+}
+
+sub diffSub
+{
+	my $cmd;
+	if ($inAnother)
+	{
+		$cmd = "$diff2 $ref{$sRefFa}.fai $outDir $inDir $inAnother";
+	}
+	elsif (-d $inDir)
+	{
+		$cmd = "$diff2 $ref{$sRefFa}.fai $outDir $inDir $pairConf $metContext";
+	}
+	else
+	{
+		$cmd = "$diff1 $inDir $outDir";
+		$cmd .= " -name1 $name1" if $name1;
+		$cmd .= " -name2 $name2" if $name2;
+		$cmd .= " -pair $pairConf" if $pairConf;
+	}
+
+	run('diff', $cmd);
+}
+
+sub correlationSub
+{
+	my ($_in, $_out, $_sam, $_pre, $_only) = @_;
+	my $cmd = "$correlation $_in $_out";
+	$cmd .= " -prefix $_pre" if $_pre; # this should be after $_out
+	$cmd .= " --only" if $_only;
+	$cmd .= " --group $_sam" if $_sam;
+	$cmd .= " $pearson $spearman $note --linkage $linkMethod --cpg $minCpG";
+	$cmd .= " --width $width" if $width;
+	$cmd .= " --height $height" if $height;
+	$cmd .= " --pdf" if $pdfFlag;
+	parallel($thread, undef, \&run, 'correlate', $cmd);
+}
+
+sub pcaSub
+{
+	my ($_in, $_out, $_sam, $_pre, $_only) = @_;
+	my $cmd = "$pca $_in $_out";
+	$cmd .= " -prefix $_pre" if $_pre; # this should be after $_out
+	$cmd .= " --only" if $_only;
+	$cmd .= " --group $_sam" if $_sam;
+	$cmd .= " --cpg $minCpG";
+	$cmd .= " --pch $pch" if $pch;
+	$cmd .= " --legend $legend" if $legend;
+	$cmd .= " --scale $scale" if $scale;
+	$cmd .= " --width $width" if $width;
+	$cmd .= " --height $height" if $height;
+	$cmd .= " --pdf" if $pdfFlag;
+	parallel($thread, undef, \&run, 'pca', $cmd);
+}
+
+sub clusteringSub
+{
+	my ($_in, $_out, $_sam, $_pre, $_only) = @_;
+	my $cmd = "$clustering $_in $_out";
+	$cmd .= " -prefix $_pre" if $_pre; # this should be after $_out
+	$cmd .= " --only" if $_only;
+	$cmd .= " --group $_sam" if $_sam;
+	$cmd .= " --diff $metDiff --cpg $minCpG --sd $sdDiff --dist $distMethod --linkage $linkMethod $hierarchical $kmeans $pam";
+	$cmd .= " --top $topClust" if $topClust;
+	$cmd .= " --width $width" if $width;
+	$cmd .= " --height $height" if $height;
+	$cmd .= " --pdf" if $pdfFlag;
+	parallel($thread, undef, \&run, 'clustering', $cmd);
+}
+
+sub windowSub
+{
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	parallel($thread, undef, \&run, 'window', "$window_methylation" . ($rrbsFilter ? " -rrbs $ref{$rrbsFilter}" : ''). " $metContext $metCov $ref{$sRefFa}.fai $inDir $outDir $window $step $project $samConf");
+}
+
+sub featureSub
+{
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	foreach my $f (sort keys %feat)
+	{
+		print "Processing $f ..\n";
+		parallel($thread, undef, \&run, 'feature', "$window_methylation" . ($rrbsFilter ? " -rrbs $ref{$rrbsFilter}" : ''). " $metContext $metCov $ref{$sRefFa}.fai $inDir $outDir " . ($window||0) . " " . ($step||0) . " $project $samConf -p $f @{$feat{$f}}");
+	}
+}
+
+sub dmrSub
+{
+	my ($_thread) = @_;
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	my $cmd = "$dmr $inDir $outDir $samConf --diff $metDiff --cpg $minCpG --pval $pvalue --fdr $fdr --top $topWindow --dist $distMethod --linkage $linkMethod $ttest $wilcoxon $kstest $raoscott $fisher $anova";
+	$cmd .= " --pairfile $pairConf" if $pairConf;
+	$cmd .= " --paired" if $pairFlag;
+	$cmd .= " --width $width" if $width;
+	$cmd .= " --height $height" if $height;
+	$cmd .= " --simulation $simulation" if $simulation;
+	$cmd .= " --filter" if $filter;
+	$cmd .= " --fraction $samFrac" if $samFrac;
+	$cmd .= " --format $format" if $format;
+	$cmd .= " --pdf" if $pdfFlag;
+	$cmd .= " -rpath $rpath" if $rpath;
+	$cmd .= " --thread $_thread" if $_thread;
+	run('stattest', $cmd);
+}
+
+sub dispersionSub
+{
+	my ($_thread) = @_;
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	my $cmd = "$dmr $inDir $outDir $samConf --cpg $minCpG --pval $pvalue --fdr $fdr --top $topWindow --dist $distMethod --linkage $linkMethod $cucconi $lepage $ansari $vartest";
+	$cmd .= " --pairfile $pairConf" if $pairConf;
+	$cmd .= " --width $width" if $width;
+	$cmd .= " --height $height" if $height;
+	$cmd .= " --simulation $simulation" if $simulation;
+	$cmd .= " --filter" if $filter;
+	$cmd .= " --fraction $samFrac" if $samFrac;
+	$cmd .= " --format $format" if $format;
+	$cmd .= " --pdf" if $pdfFlag;
+	$cmd .= " -rpath $rpath" if $rpath;
+	$cmd .= " --thread $_thread" if $_thread;
+	run('stattest', $cmd);
+}
+
+sub annotationSub
+{
+	my ($rjobs) = @_;
+
+	if ($command eq $batCmd)
+	{
+		@annFiles = (<$batDmr/*.$fdr-$metDiff.qval.csv>, <$batDmr/*.$pvalue-$metDiff.pval.csv>);
+		$scoreCol = 'diff' if !$scoreCol;
+	}
+	elsif ($fileExt)
+	{
+		@annFiles = findFiles($fileExt, @annFiles);
+	}
+
+	foreach my $file (@annFiles)
+	{
+		my $cmd = "$annotate -a -l $stream -p $priority -c $annConf $infoFlag -o $outDir";
+		$cmd .= " -d $annBase" if $annBase;
+		my @a;
+
+		if ($scoreCol)
+		{
+			@a = splitMethylation($file, $outDir);
+			$cmd .= " -f " . join(',', map {++$_} @a[2..$#a]) if $geneSum;
+		}
+
+		if ($scoreCol && (defined $hyperCut || defined $hypoCut))
+		{
+			map {parallel($thread, $rjobs, \&run, 'annotate', "$cmd -i $_") if $_} @a[0,1];
+		}
+		else
+		{
+			parallel($thread, $rjobs, \&run, 'annotate', "$cmd -i $file");
+		}
+	}
+}
+
+sub davidSub
+{
+	my ($stay, $rjobs) = @_;
+
+	if    ($showID ) { run('', "chartReport.pl -showid" ); exit; }
+	elsif ($showCat) { run('', "chartReport.pl -showcat"); exit; }
+
+	if ($command eq $batCmd)
+	{
+		@davFiles = (<$batAnn/*.$fdr-$metDiff.qval.*.list.[ub]*>, <$batAnn/*.$pvalue-$metDiff.pval.*.list.[ub]*>);
+	}
+	elsif ($fileExt)
+	{
+		@davFiles = findFiles($fileExt, @davFiles);
+	}
+
+	foreach my $file (@davFiles)
+	{
+		my $cmd = "$david -o $outDir -i $file -s $idType -u $davAccount";
+		$cmd .= " -t $topGenes" if $topGenes;
+		$cmd .= " -n $nItem" if $nItem;
+		$cmd .= " -v $davValue" if $davValue;
+		$cmd .= " -a $davCats" if $davCats;
+		parallel($thread, $rjobs, \&run, 'david', $cmd, $stay);
+	}
+}
+
+sub visualizationSub
+{
+	my ($rjobs) = @_;
+	my @files;
+
+	if ($inDir)
+	{
+		die "$inDir is not a directory\n" if (! -d $inDir);
+		my @sampre = $samConf ? keys %rep : '*';
+		     parallel($thread, undef, \&makeUcsc, 'bam',  fileGlob($inDir, 'bam'       , @sampre))                    if $bamFlag || $cwigFlag;
+		map {parallel($thread, undef, \&makeUcsc, 'mbed', fileGlob($inDir, "$_.$bedExt", @sampre))} split(/,/, $mbed) if $mbed;
+		map {parallel($thread, undef, \&makeUcsc, 'mwig', fileGlob($inDir, "$_.$bedExt", @sampre))} split(/,/, $mwig) if $mwig;
+		map {parallel($thread, undef, \&makeUcsc, 'dwig', fileGlob($inDir, "$_.$bedExt", @sampre))} split(/,/, $dwig) if $dwig;
+	}
+	else
+	{
+		parallel($thread, $rjobs, \&makeUcsc, 'auto', @ARGV);
+	}
+}
+
+sub boxplotSub
+{
+	my $cmd = "$cpgbox -t $boxTar -s $inDir -o $outDir -f 4";
+	$cmd .= " -r $boxRef" if $boxRef;
+	$cmd .= " -id" if $boxId;
+	$cmd .= " -strand 3" if $boxStrand;
+	$cmd .= " -bed" if $boxBed;
+	$cmd .= " -nocoord" if $boxNoCoord;
+	$cmd .= " -percent" if $boxPercent;
+	$cmd .= " -width $width" if $width;
+	map {$cmd .= " -$_"} @boxShow;
+	run('boxplot', $cmd);
+}
+
+sub sampleSub
+{
+	my $cmd = "$prepare_sample -i $inDir -o $outDir";
+	$cmd .= " -g $regexForGrp" if $regexForGrp;
+	$cmd .= " -f" if $fullFlag;
+	run('sample', $cmd);
+}
+
+sub bsqcSub
+{
+	push(@bsqcFiles, fileGlob($inDir, 'bam', keys %rep)) if ($samConf);
+	foreach my $file (@bsqcFiles)
+	{
+		my $cmd = $bsqc;
+		$cmd .= " -redraw" if $qcRedraw;
+		$cmd .= " -f $ref{$sRefFa}.fai $minBaseQual $minMapQual $file $outDir";
+		$cmd .= " -k $keyPos" if $keyPos;
+		$cmd .= " -w $width" if $width;
+		$cmd .= " -h $height" if $height;
+		$cmd .= " -p" if $pdfFlag;
+		parallel($thread, undef, \&run, 'bsqc', $cmd);
+	}
+}
+
+sub mcqcSub
+{
+	push(@mcqcFiles, fileGlob($inDir, "$metContext.$bedExt", keys %rep)) if ($samConf);
+	foreach my $file (@mcqcFiles)
+	{
+		my $cmd = $mcqc;
+		$cmd .= " $file " . getOutPrefix($outDir, $file, $bedExt) . " -t " . getSamName($file);
+		$cmd .= " -w $width" if $width;
+		$cmd .= " -h $height" if $height;
+		$cmd .= " -p" if $pdfFlag;
+		parallel($thread, undef, \&run, 'mcqc', $cmd);
+	}
+}
+
+sub gseaSub
+{
+	my ($stay, $rjobs) = @_;
+
+	if ($command eq $batCmd)
+	{
+		@gseaFiles = (<$batAnn/*.$fdr-$metDiff.qval.*.list.[ub]*>, <$batAnn/*.$pvalue-$metDiff.pval.*.list.[ub]*>);
+	}
+	elsif ($fileExt)
+	{
+		@gseaFiles = findFiles($fileExt, @gseaFiles);
+	}
+
+	foreach my $file (@gseaFiles)
+	{
+		foreach my $gmt (@gmtFiles)
+		{
+			my $cmd = "$gsea $gseaMem $gseaJar $outDir/" . basename($file) . '.' . basename($gmt) . " $file $gmt";
+			$cmd .= " -set_min $gseaMin" if $gseaMin;
+			$cmd .= " -set_max $gseaMax" if $gseaMax;
+			$cmd .= " -plot_top_x $gseaTop" if $gseaTop;
+			$cmd .= " -nperm $gseaPerm" if $gseaPerm;
+			$cmd .= " -scoring_scheme $gseaScore" if $gseaScore;
+			$cmd .= " -norm $gseaNorm" if $gseaNorm;
+			parallel($thread, $rjobs, \&run, 'gsea', $cmd, $stay);
+		}
+	}
+}
+
+sub cpgmpsSub
+{
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	my $cmd = "$cpgmps" . ($rrbsFilter ? " -rrbs $ref{$rrbsFilter}" : ''). " $metContext $ref{$sRefFa} $inDir $outDir $metCov $cpgmps_ms $cpgmps_mc $cpgmps_us $cpgmps_uc $cpgmps_dc $cpgmps_v $cpgmpsMem";
+	run('cpgmps', $cmd);
+}
+
+sub qdmrSub
+{
+	die "There is only one sample in $samConf\n" if @sams == 1;
+	my $cmd = "$qdmr $qdmrMem $inDir $outDir $qdmrSd";
+	run('qdmr', $cmd);
+}
+
+sub bsmoothSub
+{
+	my $cmd = "$bsmooth $inDir $outDir/ $samConf --cov $metCov --diff $metDiff --cpg $minCpG --window $smwin --loci $smloc --length $smlen --gap $smgap --top $smtop";
+	$cmd .= " --cutoff $smcut" if $smcut;
+	$cmd .= " --quantile $smquan" if $smquan;
+	$cmd .= " --pairfile $pairConf" if $pairConf;
+	$cmd .= " --paired" if $pairFlag;
+	$cmd .= " --width $width" if $width;
+	$cmd .= " --height $height" if $height;
+	$cmd .= " --pdf" if $pdfFlag;
+	$cmd .= " --thread $thread" if $thread;
+	run('bsmooth', $cmd);
+}
+
+sub methcloneSub
+{
+	if ($inAnother)
+	{
+		$outDir =~ s/\.gz$//;
+		$outDir =~ s/\.methclone$//;
+		my $cmd = "$methcloneEncode -r $ref{$sRefFa} -cov $methcloneCov -dist $methcloneDist -diff $methcloneDiff -i $inDir -j $inAnother -o $outDir.methclone.gz";
+		$cmd .= " -p $methclonePath" if $methclonePath;
+		$cmd .= " -leave" if $leave;
+		run('methclone', $cmd);
+	}
+	elsif (-d $inDir)
+	{
+		my (%files, @cmds);
+		my @pairs;
+		if ($name1 && $name2) { push(@pairs, [$name1, $name2]); }
+		else                  { @pairs = load($pairConf); }
+
+		foreach my $pair (@pairs)
+		{
+			my $_outDir = $outDir;
+			if (@pairs > 1 && (getSamples($pair->[0]) || getSamples($pair->[1])))
+			{
+				$_outDir .= "/$pair->[0]-$pair->[1]";
+				(-d $_outDir) || mkdir($_outDir) || die("Can't create $_outDir\n");
+			}
+
+			foreach my $p0 (exists $grp{$pair->[0]} ? getSamples($pair->[0]) : ($pair->[0]))
+			{
+				foreach my $p1 (exists $grp{$pair->[1]} ? getSamples($pair->[1]) : ($pair->[1]))
+				{
+					my @f0 = <$inDir/$p0.*.bam>; die "Not found: $inDir/$p0.*.bam\n" if !@f0;
+					my @f1 = <$inDir/$p1.*.bam>; die "Not found: $inDir/$p1.*.bam\n" if !@f1;
+					my $r = $p0 eq $pair->[0] && $p1 eq $pair->[1] && $pair->[2] ? "$pair->[2]" : "$p0-$p1";
+					$files{$f0[0]}++;
+					$files{$f1[0]}++;
+					push(@cmds, ($methclonePath||$methclone) . " $outDir/" . basename($f0[0]) . " $outDir/" . basename($f1[0]) . " $_outDir/$r.methclone.gz sample $methcloneCov $methcloneDist $methcloneDiff");
+				}
+			}
+		}
+
+		map {parallel($thread, undef, \&run, 'methcloneencode', "$methcloneEncode -r $ref{$sRefFa} -i $_ -tmp $outDir")} keys %files;
+		waitFor();
+		map {parallel($thread, undef, \&run, 'methclone', $_)} @cmds;
+		waitFor();
+		map {my $t = "$outDir/" . basename($_); unlink($t, "$t.bai")} keys %files if !$leave;
+	}
+}
+
+sub mlogitSub
+{
+	if ($inAnother)
+	{
+		my $cmd = "$methcloneEncode -r $ref{$sRefFa} -cov $methcloneCov -dist $methcloneDist -diff $methcloneDiff -i $inDir -j $inAnother -o $outDir";
+		$cmd .= ".gz" if $outDir !~ /\.gz$/;
+		$cmd .= " -p $methclonePath" if $methclonePath;
+		$cmd .= " -leave" if $leave;
+		run('methclone', $cmd);
+	}
+	elsif (-d $inDir)
+	{
+		my (%files, @cmds);
+		my @pairs;
+		if ($name1 && $name2) { push(@pairs, [$name1, $name2]); }
+		else                  { @pairs = load($pairConf); }
+
+		foreach my $pair (@pairs)
+		{
+			my $_outDir = $outDir;
+			if (@pairs > 1 && (getSamples($pair->[0]) || getSamples($pair->[1])))
+			{
+				$_outDir .= "/$pair->[0]-$pair->[1]";
+				(-d $_outDir) || mkdir($_outDir) || die("Can't create $_outDir\n");
+			}
+
+			foreach my $p0 (exists $grp{$pair->[0]} ? getSamples($pair->[0]) : ($pair->[0]))
+			{
+				foreach my $p1 (exists $grp{$pair->[1]} ? getSamples($pair->[1]) : ($pair->[1]))
+				{
+					my @f0 = <$inDir/$p0.*.bam>; die "Not found: $inDir/$p0.*.bam\n" if !@f0;
+					my @f1 = <$inDir/$p1.*.bam>; die "Not found: $inDir/$p1.*.bam\n" if !@f1;
+					my $r = $p0 eq $pair->[0] && $p1 eq $pair->[1] && $pair->[2] ? "$pair->[2]" : "$p0-$p1";
+					$files{$f0[0]}++;
+					$files{$f1[0]}++;
+					push(@cmds, ($methclonePath||$methclone) . " $outDir/" . basename($f0[0]) . " $outDir/" . basename($f1[0]) . " $_outDir/$r.gz sample $methcloneCov $methcloneDist $methcloneDiff");
+				}
+			}
+		}
+
+		map {parallel($thread, undef, \&run, 'methcloneencode', "$methcloneEncode -r $ref{$sRefFa} -i $_ -tmp $outDir")} keys %files;
+		waitFor();
+		map {parallel($thread, undef, \&run, 'methclone', $_)} @cmds;
+		waitFor();
+		map {my $t = "$outDir/" . basename($_); unlink($t, "$t.bai")} keys %files if !$leave;
+	}
+}
+
+sub fullCommand
+{
+	my ($com) = @_;
+	return undef if !$com;
+
+	if    ($com =~ /^bat/      ) { $com = $batCmd; }
+	elsif ($com =~ /^david/    ) { $com = $davCmd; }
+	elsif ($com =~ /^gsea/     ) { $com = $gseCmd; }
+	elsif ($com =~ /^cpgmps/   ) { $com = $cpgCmd; }
+	elsif ($com =~ /^qdmr/     ) { $com = $qdmCmd; }
+	elsif ($com =~ /^bsmooth/  ) { $com = $bsmCmd; }
+	elsif ($com =~ /^methclone/) { $com = $mclCmd; }
+	elsif ($com =~ /^mlogit/   ) { $com = $mloCmd; }
+	elsif ($com =~ /^sam/      ) { $com = $samCmd; }
+	elsif ($com =~ /^map/      ) { $com = $mapCmd; }
+	elsif ($com =~ /^joi/      ) { $com = $joiCmd; }
+	elsif ($com =~ /^spl/      ) { $com = $splCmd; }
+	elsif ($com =~ /^win/      ) { $com = $winCmd; }
+	elsif ($com =~ /^fea/      ) { $com = $feaCmd; }
+	elsif ($com =~ /^dmr/      ) { $com = $dmrCmd; }
+	elsif ($com =~ /^dis/      ) { $com = $disCmd; }
+	elsif ($com =~ /^cor/      ) { $com = $corCmd; }
+	elsif ($com =~ /^pca/      ) { $com = $pcaCmd; }
+	elsif ($com =~ /^clu/      ) { $com = $cluCmd; }
+	elsif ($com =~ /^ann/      ) { $com = $annCmd; }
+	elsif ($com =~ /^vis/      ) { $com = $visCmd; }
+	elsif ($com =~ /^met/      ) { $com = $metCmd; }
+	elsif ($com =~ /^mer/      ) { $com = $merCmd; }
+	elsif ($com =~ /^pai/      ) { $com = $paiCmd; }
+	elsif ($com =~ /^dif/      ) { $com = $difCmd; }
+	elsif ($com =~ /^gro/      ) { $com = $groCmd; }
+	elsif ($com =~ /^box/      ) { $com = $boxCmd; }
+	elsif ($com =~ /^bsq/      ) { $com = $bsqCmd; }
+	elsif ($com =~ /^mcq/      ) { $com = $mcqCmd; }
+	elsif ($com =~ /^ind/      ) { $com = $indCmd; }
+	else                         { $wrong = 1; }
+
+	return $com;
+}
+
+sub mapping
+{
+	my ($njobs, $inFile, $bsMode, $qualType, $mapDir, $mapName) = @_;
+	my $outFile = getMapOutPrefix($inFile, $mapDir, $mapName);
+
+	if ($njobs > 1)
+	{
+		my %jobs;
+		my $baseFile = basename($outFile);
+		my $parDir = "$mapDir/$baseFile.tmp";
+		if (-e $parDir)
+		{
+			die "Please remove directory $parDir or use either -force\n" if !$force && !$resume;
+			system("rm -r $parDir") if !$resume;
+		}
+		else
+		{
+			mkdir($parDir) || die("Can't create $parDir\n") if !$debug;
+		}
+
+		print "Splitting input file ...\n" if !$quiet;
+		run('split', "$fq_split $inFile $njobs $parDir/part");
+
+		print "Running jobs ...\n" if !$quiet;
+		foreach (<$parDir/part.*[0-9]>)
+		{
+			parallel($njobs, \%jobs, \&mappingUnit, $_, $bsMode, $qualType, $parDir, $njobs);
+#			sleep(1);
+		}
+
+		print "Waiting jobs ...\n" if !$quiet;
+		waitFor(\%jobs);
+		print "Merging jobs ...\n" if !$quiet;
+		merge($njobs, \%jobs, $allBit, $outFile, "$parDir/part.*");
+		waitFor(\%jobs);
+		system("rm -r $parDir") && die "Error in rm -r $parDir\n" if (!$leave);
+	}
+	else
+	{
+		mappingUnit($inFile, $bsMode, $qualType, $outFile, $njobs);
+	}
+}
+
+sub mappingUnit
+{
+	my ($seq, $bsMode, $qualType, $out, $njobs) = @_;
+	my $seqCleaned;
+
+	if ($minReadLen || $qual5 || $qual3 || $trim5 || $trim3)
+	{
+		$seqCleaned = $njobs > 1 ? "$seq.clean" : "$out.clean";
+		print "Cleanning input file ...\n" if $verbose;
+		run('trim', "$fq_trim -type $qualType -5q $qual5 -3q $qual3 -5l $trim5 -3l $trim3 -len $minReadLen -i $seq -o $seqCleaned -log $seqCleaned.log");
+		$seq = $seqCleaned;
+	}
+
+	my $cmd = "$bsmapper";
+	$cmd .= " -leave" if $leave;
+	$cmd .= " -$bsMode $mapConf $ref{$sRefFa} $ref{$sRefC} $ref{$sRefG} $ind{$mapper{$sMapPro}}{$sRefC} $ind{$mapper{$sMapPro}}{$sRefG} $seq $qualType $out $minMapQual $errRate $clipRate $occ 1 $minBaseQual $bases";
+	$cmd .= " $rrbsConf" if $rrbsConf;
+	run($mapper{$sMapPro}, $cmd);
+
+	unlink($seqCleaned) if $njobs == 1;
+}
+
+sub hydroxymethylation
+{
+	my ($mapDir, $_outDir) = @_;
+	my $mc  = openOutput("$_outDir/5mc.conf");
+	my $hmc = openOutput("$_outDir/5hmc.conf");
+
+	foreach my $id (keys(%hydroxy))
+	{
+		my $inFile1 = getMapOutPrefix($id             , $mapDir);
+		my $inFile2 = getMapOutPrefix($hydroxy{$id}[0], $mapDir);
+		die "Can't find files for $id\n"              if !$inFile1;
+		die "Can't find files for $hydroxy{$id}[0]\n" if !$inFile2;
+
+		print "Computing hydroxymethylation for $id vs $hydroxy{$id}[0]...\n" if !$quiet;
+		foreach my $ext (<$inFile1.*.bed.gz>)
+		{
+			$ext =~ s/$inFile1.//;
+			parallel($thread, undef, \&run, 'diff', "$diff2 $ref{$sRefFa}.fai $_outDir/$hydroxy{$id}[1].$ext $inFile1.$ext $inFile2.$ext");
+		}
+
+		print $mc  join("\t", $tabseq ? ($hydroxy{$id}[1],          $hydroxy{$id}[2] ) : ($hydroxy{$id}[0], $sam2grp{$hydroxy{$id}[0]})), "\n";
+		print $hmc join("\t", $tabseq ? ($hydroxy{$id}[0], $sam2grp{$hydroxy{$id}[0]}) : ($hydroxy{$id}[1],          $hydroxy{$id}[2] )), "\n";
+	}
+
+	close($mc);
+	close($hmc);
+}
+
+sub merge_replicate
+{
+	my ($bits, $mapDir, $_outDir) = @_;
+
+	foreach my $id (keys(%rep))
+	{
+		my @inPre = map {getMapOutPrefix($sams[$_][0], $mapDir)} @{$rep{$id}};
+		next if (@{$rep{$id}} == 1);
+
+		print "Merging replicates for $id ...\n" if !$quiet;
+		print "$id: @inPre\n" if $verbose;
+		merge($thread, undef, $bits, "$_outDir/$id", @inPre);
+	}
+}
+
+sub merge_group
+{
+	my ($bits, $mapDir, $_outDir) = @_;
+
+	foreach my $id (keys(%grp))
+	{
+		my @inPre = map {getMapOutPrefix($sams[$_][2], $mapDir)} @{$grp{$id}};
+		next if (@{$grp{$id}} == 1);
+
+		print "Merging samples for $id ...\n" if !$quiet;
+		print "$id: @inPre\n" if $verbose;
+		merge($thread, undef, $bits, "$_outDir/$id", @inPre);
+	}
+}
+
+sub merge
+{
+	my ($njobs, $rjobs, $bits, $outPre, @inPre) = @_;
+	my $allSum   = join(' ', map {"$_.best.bam.all.summary"} @inPre);
+	my $uniSum   = join(' ', map {"$_.best.bam.summary"} @inPre);
+	my $bamFiles = join(' ', map {"$_.best.bam"} @inPre);
+	my $logFiles = join(' ', map {"$_.bsmapper.log"} @inPre);
+	my $cleFiles = join(' ', map {"$_.clean.log"} @inPre);
+
+	($bits & $sumBit) && run('', "cat $allSum | $merge_sam_summary -q -o $outPre.best.bam.all.summary        || exit \$?");
+	($bits & $sumBit) && run('', "cat $uniSum | $merge_sam_summary -q -o $outPre.best.bam.summary || exit \$?");
+	($bits & $logBit) && run('', "cat $logFiles > $outPre.bsmapper.log || exit \$?");
+	($bits & $logBit) && $cleFiles && run('', "cat $cleFiles | $merge_clean -q -o $outPre.clean.log || exit \$?");
+	($bits & $bamBit) && parallel($njobs, $rjobs, \&mergeBam, "$outPre", $bamFiles);
+	($bits & $bedBit) ||  return;
+
+	my %bedTypes;
+	foreach (<$inPre[0].best.*.$bedExt>)
+	{
+		my ($t) = /best.(.+).$bedExt/ || die "Wrong file names:$_\n"; 
+		next if $t =~ /\./;
+		$bedTypes{$1}++
+	}
+	#print join(" ", keys %bedTypes), "\n";
+
+	foreach my $type (keys %bedTypes)
+	{
+		my $files = join(' ', map {"$_.best.$type.$bedExt"} @inPre);
+		parallel($njobs, $rjobs, \&run, 'merge_bed', "$merge_bed -f $ref{$sRefFa}.fai -q -o $outPre.best.$type.$bedExt $files");
+	}
+}
+
+sub mergeBam
+{
+	my ($outBase, $bamFiles) = @_;
+	run($samtools, "$samtools merge -f $outBase.best.bam $bamFiles");
+	run($samtools, "$samtools index $outBase.best.bam");
+}
+
+sub copy
+{
+	my ($outPre, $inPre) = @_;
+
+	run('', "cp $inPre.best.bam.all.summary $outPre.best.bam.all.summary        || exit \$?");
+	run('', "cp $inPre.best.bam.summary     $outPre.best.bam.summary || exit \$?");
+	run('', "cp $inPre.best.bam.bai         $outPre.best.bam.bai     || exit \$?");
+	run('', "cp $inPre.bsmapper.log         $outPre.bsmapper.log              || exit \$?");
+	parallel($thread, undef, \&run, 'cp', "cp $inPre.best.bam         $outPre.best.bam"        );
+	parallel($thread, undef, \&run, 'cp', "cp $inPre.best.scg.$bedExt $outPre.best.scg.$bedExt");
+	parallel($thread, undef, \&run, 'cp', "cp $inPre.best.cg.$bedExt  $outPre.best.cg.$bedExt" );
+	parallel($thread, undef, \&run, 'cp', "cp $inPre.best.ch.$bedExt  $outPre.best.ch.$bedExt" );
+}
+
+sub checkLog
+{
+	my ($prefix) = @_;
+
+	map {unlink($_) if !-s $_} <$prefix.o*>;
+	die("Error in files: " . join(' ', <$prefix.o*>) . "\n") if <$prefix.o*>;
+}
+
+sub getSamples
+{
+	my ($gid) = @_;
+	return !exists $grp{$gid} ? () : map {$sams[$_][2]} @{$grp{$gid}};
+}
+
+sub getSamName
+{
+	my ($path) = @_;
+	$path = basename($path);
+	$path =~ s/\..*$//;
+	return $path;
+}
+
+sub getOutPrefix
+{
+	my ($dir, $path, $ext) = @_;
+	$path = basename($path);
+	$path =~ s/\.$ext//;
+	return "$dir/$path";
+}
+
+sub getMapOutPrefix
+{
+	my ($inFile, $mapDir, $mapName) = @_;
+	my $prefix;
+
+	if (defined $mapName && exists $rep{$mapName} && @{$rep{$mapName}} == 1)
+	{
+		$prefix = $mapName;
+	}
+	else
+	{
+		$prefix = basename($inFile);
+		$prefix =~ s/(\.fastq|\.fq|_sequence.txt)(\.gz)*//;
+	}
+
+	return "$mapDir/$prefix";
+}
+
+sub indexRef
+{
+	run('index', "$bsindex $mapConf $inDir $outDir");
+
+	my $name = basename($inDir);
+	$name =~ s/\.fa(sta)*$//;
+	$ind{$mapper{$sMapPro}}{tc} = "$name.c.fa";
+	$ind{$mapper{$sMapPro}}{ag} = "$name.g.fa";
+
+	my $out;
+	my $file = "$outDir/$name.conf";
+	if (-e $file)
+	{
+		loadRef($file, 0);
+	}
+
+	$out = openOutput($file);
+	print $out qq(ref	$name
+seq	$name.fa
+length	$name.fa.length
+tc	$name.c.fa
+ag	$name.g.fa
+);
+	map {print $out qq(index_tc	$_	$ind{$_}{tc}
+index_ag	$_	$ind{$_}{ag}
+);
+	} keys %ind;
+
+	map {print $out "$_\t$ref{$_}\n" if !/^ref|seq|length|tc|ag$/} keys %ref;
+
+	if ($rrbsConf)
+	{
+		run('index', "$rrbsBed $inDir -e $rrbs{$sRrbsSite} $outDir/$name.$rrbs{$sRrbsName}.bed") if !-s "$outDir/$name.$rrbs{$sRrbsName}.bed";
+		print $out "$rrbs{$sRrbsName}\t$name.$rrbs{$sRrbsName}.bed\n" if !exists $ref{$rrbs{$sRrbsName}};
+	}
+
+	close($out);
+}
+
+sub makeUcsc
+{
+	my ($flag, @files) = @_;
+	my (@bamFiles, @cwigFiles, @mwigFiles, @dwigFiles);
+	my $first = 0;
+	my (%done, %jobs);
+
+	foreach my $f (@files)
+	{
+		next if exists $done{$f};
+		print "Processing $f ..\n";
+		if ($flag eq 'auto' ? $f =~ /\.bam$/ : $flag eq 'bam')
+		{
+			if ($bamFlag) { push(@bamFiles, $f); }
+			if ($cwigFlag)
+			{
+				my $g = basename($f);
+				$g =~ s/\.bam$/.bigwig/;
+				$g = "$outDir/$g";
+
+				if (-e $g)
+				{
+					print("Exists bigwig file: $g\n");
+					print("If you want to regenerate it, please remove the file\n") if $first++ == 0;
+					push(@cwigFiles, $g);
+				}
+				elsif (!which('wigToBigWig'))
+				{
+					warn "Can't find wigToBigWig\n";
+				}
+				else
+				{
+					parallel($thread, \%jobs, \&run, 'bam2wig', "bam2wig $outDir $f $ref{$sRefFa} $ref{$sRefLen}");
+					push(@cwigFiles, $g);
+				}
+			}
+		}
+		elsif ($flag eq 'auto' ? $f =~ /\.bigwig$/ : $flag eq 'bigwig')
+		{
+			push(@cwigFiles, $f);
+		}
+		elsif ($flag ne 'auto' || $f =~ /\.bed(\.gz)*$/)
+		{
+			if ($flag eq 'auto' ? defined $mbed : $flag eq 'mbed')
+			{
+				parallel($thread, \%jobs, \&run, 'bed4ucsc', "bed4ucsc $metCov $outDir $ref{$sRefName} $f");
+			}
+			if ($flag eq 'auto' ? defined $mwig : $flag eq 'mwig')
+			{
+				parallel($thread, \%jobs, \&run, 'bed2wig', "bed2wig -shift -0.5 -cov $metCov $outDir $ref{$sRefLen} $f");
+				my $g = $f; $g =~ s/\.bed(\.gz)*$/.metwig/;
+				push(@mwigFiles, $g);
+			}
+			if ($flag eq 'auto' ? defined $dwig : $flag eq 'dwig')
+			{
+				parallel($thread, \%jobs, \&run, 'bed2wig', "bed2wig -diff $outDir $ref{$sRefLen} $f");
+				my $g = $f; $g =~ s/\.bed(\.gz)*$/.diffwig/;
+				push(@dwigFiles, $g);
+			}
+		}
+		$done{$f} = 1;
+	}
+
+	waitFor(\%jobs);
+
+	run('', "make_ucsc_track $outDir $ref{$sRefName} $url4ucsc @bamFiles ") if @bamFiles;
+	run('', "make_ucsc_track $outDir $ref{$sRefName} $url4ucsc @cwigFiles") if @cwigFiles;
+	run('', "make_ucsc_track $outDir $ref{$sRefName} $url4ucsc @mwigFiles") if @mwigFiles;
+	run('', "make_ucsc_track $outDir $ref{$sRefName} $url4ucsc @dwigFiles") if @dwigFiles;
+}
+
+sub splitMethylation
+{
+	my ($file, $outDir) = @_;
+	# chr   start end   padjust  diff
+	my $in = openInput($file);
+	my $head = <$in>;
+	my %indexes; # fisher's exact test can have multiple columns
+
+	if ($scoreCol =~ /^\d+$/)
+	{
+		$indexes{$scoreCol-1}++;
+	}
+	else
+	{
+		my @a = split(/[\t\r\n]/, $head);
+		map {$indexes{$_}++ if $a[$_] =~ /\b$scoreCol\b/} 0..$#a;
+#		die "Undefined column for diff: $head\n" if ! keys %indexes;
+		$indexes{4}++ if ! keys %indexes;
+	}
+
+	my $outFile = $outDir . '/' . basename($file);
+	$outFile =~ s/\.gz//;
+	$outFile =~ s/\.(txt|csv|xls|bed)//;
+
+	my $hyper = openOutput("$outFile.hyper") if defined $hyperCut;
+	my $hypo  = openOutput("$outFile.hypo" ) if defined $hypoCut;
+	print $hyper $head if defined $hyperCut && $head;
+	print $hypo  $head if defined $hypoCut  && $head;
+
+	if (defined $hyperCut || defined $hypoCut)
+	{
+		while (<$in>)
+		{
+			my @a = split(/[\t\r\n]/);
+			my @counts = (0, 0);
+			map {
+				$counts[0]++ if defined $hypoCut  && $a[$_] < $hypoCut;
+				$counts[1]++ if defined $hyperCut && $a[$_] > $hyperCut;
+			} keys %indexes;
+			if    ($counts[0]*$counts[1] != 0) { }
+			elsif ($counts[1]             > 0) { print $hyper $_; }
+			elsif ($counts[0]             > 0) { print $hypo  $_; }
+			else                               { }
+		}
+	}
+
+	close($in);
+	close($hyper) if defined $hyperCut;
+	close($hypo ) if defined $hypoCut;
+
+	return (defined $hyperCut ? "$outFile.hyper" : undef, defined $hypoCut ? "$outFile.hypo" : undef, sort keys %indexes);
+}
+
+sub gridCommand
+{
+	return '' if !$gridConf;
+
+	my $_ref;
+
+	if ($command eq $indCmd)
+	{
+		$_ref = basename($inDir, '.fa', '.fas', '.fasta');
+		$_ref =~ s/all$// if !exists $grid{$_ref}{$indCmd};
+	}
+	else
+	{
+		$_ref = $ref{$sRefName};
+	}
+
+	map {return $grid{$_ref}{$_} if exists $grid{$_ref}{$_}} @_ if $_ref;
+	return $grid{$sGridCom}{$_[0]} || $grid{$sGridCom}{$sGridCom} || '';
+}
+
+#-------------------------------------------------------------------------------
+
+sub setDirs
+{
+	my ($o, @is) = @_;
+	$outDir = $o;
+	mkdir($outDir) || die("Can't create $outDir\n") if !-e $outDir;
+	if (@is == 1)
+	{
+		$inDir = $is[0];
+	}
+}
+
+sub parallel
+{
+	my $njobs = shift;
+	my $rjobs = shift;
+	my $fun   = shift;
+
+	if ($njobs == 1)
+	{
+		$fun->(@_);
+		return;
+	}
+	else
+	{
+		waitFor($rjobs, $njobs);
+		return fork_child($njobs, $rjobs, $fun, @_);
+	}
+}
+
+sub run
+{
+	my ($job, $cmd, $stay) = @_;
+
+	$cmd =~ s/\$TMPDIR/$ENV{TMPDIR}/g;
+	my @cmds = split(/\s+/, $cmd);
+	$cmds[0] = which($cmds[0]);
+	die "Can't find the path of $cmds[0]\n" if !$cmds[0];
+	$cmd = join(' ', @cmds);
+	if ($job) { $cmd = gridCommand($job) . " $cmd"; }
+	print "$cmd\n" if !$quiet && ($verbose || $debug);
+
+#	if (exists $jobStatus{$cmd}) { print "DONE: $jobStatus{$cmd} $cmd\n"; }
+	if (exists $jobStatus{$cmd} && $jobStatus{$cmd} == 1) { return; }
+	if ($jobLogHandle) { print $jobLogHandle "< ", $job||'null', " ", $stay || 0, " $cmd\n"; }
+
+	if (!$debug && system($cmd))
+	{
+		if ($stay) { warn "Error in $$: $cmd\n"; }
+		else       { die  "Error in $$: $cmd\n"; }
+	}
+
+	if ($jobLogHandle) { print $jobLogHandle "> ", $job||'null', " ", $stay || 0, " $cmd\n"; }
+}
+
+sub fork_child
+{
+	my ($njobs, $rjobs, $fun, @args) = @_;
+	my $pid = fork;
+	die "Can't fork: $!\n" if !defined $pid;
+	if ($pid != 0)
+	{
+		$rjobs->{$pid} = 1 if $rjobs;
+		$children{$pid} = [keys(%children)+0, @args];
+		return $pid;
+	}
+	else # Now in child process
+	{
+#		print "pid=$pid child=$$\n";
+		%children = ();
+		$thread = $njobs;
+		$process = $pid;
+		$fun->(@args);
+		exit $?;
+	}
+}
+
+sub waitFor
+{
+	my ($rjobs, $njobs) = @_;
+	$njobs = 1 if !$njobs;
+
+	while (($rjobs ? keys %$rjobs : keys %children) >= $njobs)
+	{
+#		print "pid=$$ children=", keys(%children)+0; print " jobs=", keys(%$rjobs)+0 if $rjobs; print " cutoff= $njobs\n";
+		print "pid=$$ is waiting for ", keys(%children)+0, " jobs\n";
+		my $pid = waitpid(-1, 0);
+
+		if ($pid == -1)
+		{
+			print "pid=$$ waitpid=-1\n";
+			%$rjobs = ();
+			%children = ();
+		}
+		elsif ($?)
+		{
+			print "status of $pid = $?\n";
+			exitAll($pid);
+		}
+		else
+		{
+#			print "pid=$$ DONE=$pid\n";
+			delete $rjobs->{$pid} if $rjobs;
+			delete $children{$pid};
+		}
+	}
+}
+
+sub exitAll
+{
+	my ($pid) = @_;
+
+	#killAll(keys %$rhash);
+	kill($$);
+	#kill - SIGKILL, getpgrp;
+	sleep(1);
+
+	if ($pid && exists $children{$pid})
+	{
+		die "\nError occurrend in a child job: $pid @{$children{$pid}}\n";
+	}
+	else
+	{
+		die "\nError occurrend in a job\n";
+	}
+}
+
+sub descendants
+{
+	my (@pids) = @_;
+	my %des;
+
+	foreach my $p (@pids)
+	{
+		$des{$p} = 1;
+
+		foreach my $c (`ps -o pid --no-headers --ppid $p`)
+		{
+			my $tem = descendants($c);
+			map {$des{$_}++} keys %$tem;
+		}
+	}
+
+	return \%des;
+}
+
+sub killAll
+{
+#	my $des = descendants(@_);
+#	map {kill 15, $_} keys %$des;
+
+# The following works well in shell, but kill GP
+	kill -15, getpgrp 0;
+#	kill -9, getpgrp 0;
+}
+
+sub catch
+{
+	if ($process)
+	{
+		killAll($$);
+		exit -1;
+	}
+}
+
+sub combineBits
+{
+	my $bits = 0;
+	$_[0] && ($bits |= $bamBit);
+	$_[1] && ($bits |= $bedBit);
+	$_[2] && ($bits |= $sumBit);
+	$_[3] && ($bits |= $logBit);
+	return $bits || $allBit;
+}
+
+sub qualType
+{
+	my ($fileName) = @_;
+	my (%quals, $min, $max);
+	my $in = openInput($fileName);
+	print "Checking quality score for ", $fileName || 'STDIN', " ...\n" if !$quiet;
+
+	for (my $i = 0; $i < 4*$nseq && (my $s = <$in>); $i++)
+	{
+		next if $i%4 != 3;
+		chop($s);
+		foreach my $c (split(//, $s))
+		{
+			my $q = ord($c);
+			$quals{$q}++;
+			$min = $q if !defined $min || $min > $q;
+			$max = $q if !defined $max || $max < $q;
+		}
+	}
+
+	close($fileName);
+
+	my $t = $min < 59 ? $sMapQ33 : $max > 74 ? $sMapQ64 : $sMapQ33;
+	print "\t=> $t\n" if !$quiet;
+	return $t;
+}
+
+sub getFile
+{
+	my ($dir, $base, $file, $wild) = @_;
+
+	return $file            if $wild ? <$file.*> : -e $file;
+	return "$file.gz"       if -e "$file.gz";
+	return "$dir/$file"     if $dir && ($wild ? <$dir/$file.*> : -e "$dir/$file");
+	return "$dir/$file.gz"  if $dir && -e "$dir/$file.gz";
+
+	$dir = dirname($base);
+	return "$dir/$file"     if $dir && ($wild ? <$dir/$file.*> : -e "$dir/$file");
+	return "$dir/$file.gz"  if $dir && -e "$dir/$file.gz";
+
+	if (-l $base)
+	{
+		$dir = dirname(File::Spec->rel2abs(readlink($base), dirname($base)));
+		return "$dir/$file"     if $dir && ($wild ? <$dir/$file.*> : -e "$dir/$file");
+		return "$dir/$file.gz"  if $dir && -e "$dir/$file.gz";
+	}
+
+	return $file;
+}
+
+sub getConfFile
+{
+	my ($file) = @_;
+	return -e $file ? $file : -e "$home/conf/$file" ? "$home/conf/$file" : -e "$home/$file" ? "$home/$file" : $file;
+}
+
+sub checkFiles
+{
+	foreach (@_)
+	{
+		die "Can't find the file $_\n" if !-e $_ && !-e "$_.gz";
+	}
+}
+
+sub fileGlob
+{
+	my ($dir, $ext, @sams) = @_;
+	my @files;
+	map {map {push(@files, $_) if /\b$ext\b/} <$dir/$_.*$ext>} @sams;
+	return @files;
+}
+
+sub findFiles
+{
+	my ($ext, @dirs) = @_;
+	my @exts = split(/,/, $ext);
+	return map { my $d = -d $_ ? $_ : dirname($_); map { <$d/*.$_> } @exts } @dirs;
+}
+
+sub loadSample
+{
+	my ($fileName) = @_;
+
+	print "Loading sample configuration from ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split(/[\t\r\n]/);
+		die "Wrong format in $fileName\n$_" if @a < 4;
+
+		if ($a[1] =~ /^\d$/)
+		{
+			$a[0] = getFile($samBase, $samConf, $a[0]);
+			push(@sams, \@a);
+			push(@{$rep{$a[2]}}, $#sams);
+			push(@{$grp{$a[3]}}, $#sams);
+			$sam2grp{$a[2]} = $a[3];
+			print "\t@{$sams[-1]}\n" if $verbose;
+		}
+		else
+		{
+			push(@{$hydroxy{$a[0]}}, @a[1..3]);
+		}
+	}
+
+	close($in) if defined $fileName;
+	print "\t=> ", @sams+0, " files in ", keys(%rep)+0, " samples and ", keys(%grp)+0, " groups\n" if !$quiet;
+	print "\t=> ", keys(%hydroxy)+0, " samples were defined for hydroxymethylation\n" if !$quiet && ($tabseq || $oxbsseq);
+
+	if ($command =~ /^$mapCmd|$batCmd/)
+	{
+		map {checkFiles($_->[0])} @sams;
+		die "No configuration for hydroxymethylation in $samConf\n" if !keys %hydroxy && ($tabseq || $oxbsseq);
+		map {
+			die "Undefined sample: $_\n"              if !exists $rep{$_};
+			die "Undefined sample: $hydroxy{$_}[0]\n" if !exists $rep{$hydroxy{$_}[0]};
+		} keys %hydroxy;
+	}
+}
+
+sub loadRef
+{
+	my ($fileName, $checkFlag) = @_;
+
+	print "Loading reference configuration from ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split(/[\t\r\n]/);
+
+		if (/^index_(\S+)/)
+		{
+			$ind{$a[1]}{$1} = $checkFlag ? getFile($refBase, $refConf, $a[2], 1) : $a[2];
+		}
+		else
+		{
+			$a[1] = getFile($refBase, $refConf, $a[1]) if $checkFlag && $a[0] ne $sRefName;
+			print "\t$a[0] $a[1]\n" if $verbose;
+			$ref{$a[0]} = $a[1];
+		}
+	}
+
+	print "\t=> ", keys(%ref)+0, " files\n" if !$quiet;
+	map {checkFiles($ref{$_}) if $_ ne $sRefName} keys %ref if $checkFlag;
+	close($in) if defined $fileName;
+
+	if ($mapConf && !exists $ind{$mapper{$sMapPro}})
+	{
+		warn "Undefined reference indexes for $mapper{$sMapPro}\n";
+		die "$refConf has ", join(' ', keys %ind), "\n";
+	}
+
+	if ($checkFlag && $rrbs{$sRrbsName} && !exists $ref{$rrbs{$sRrbsName}})
+	{
+		die "Undefined RRBS file for $rrbs{$sRrbsName} in $refConf\n";
+	}
+
+	if (!exists $ref{$sRefLen})
+	{
+		die "No chromosome length file in $refConf\n";
+	}
+
+#	map {map {run('', "\tls $_* >/dev/null")} values %$_} values %ind if $checkFlag;
+	map {map {run('', "ls $_* >/dev/null")} values %$_} values %ind if $checkFlag;
+}
+
+sub loadMapper
+{
+	my ($fileName) = @_;
+
+	print "Loading mapper configuration from ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split(/[=\r\n]/);
+		print "\t$_" if $verbose;
+		$mapper{$a[0]} = $a[1];
+	}
+
+	die "Undefined $sMapPro in $fileName\n" if !exists $mapper{$sMapPro};
+	die "Undefined $sMapWatson in $fileName\n" if !exists $mapper{$sMapPro};
+	die "Undefined $sMapCreek in $fileName\n" if !exists $mapper{$sMapPro};
+	die "Undefined $sMapQ64 in $fileName\n" if !exists $mapper{$sMapQ64};
+	die "Undefined $sMapQ33 in $fileName\n" if !exists $mapper{$sMapQ33};
+	close($in) if defined $fileName;
+}
+
+sub loadRrbs
+{
+	my ($fileName) = @_;
+
+	print "Loading RRBS configuration from ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split(/[\t\r\n]/);
+		die "Wrong format in $fileName\n$_" if @a < ($a[0] eq $sRrbsFix ? 3 : 2);
+		if ($a[0] ne $sRrbsFix) { $rrbs{$a[0]} = $a[1]; }
+		else                    { push(@{$rrbs{$a[0]}}, join(':', @a[2..$#a])); }
+		print "\t@a\n" if $verbose;
+	}
+
+	print "\t=> ", keys(%rrbs)+0, " RRBS enzymes\n" if $verbose;
+	close($in) if defined $fileName;
+}
+
+sub loadGrid
+{
+	my ($fileName) = @_;
+
+	print "Loading grid configuration from ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split(/[\t\r\n]/);
+		$a[2] =~ s/^['"]// && $a[2] =~ s/['"]$//;
+		print "\t$a[0] $a[1] $a[2]\n" if $verbose;
+		$grid{$a[0]}{$a[1]} = $a[2];
+	}
+
+	die "Undefined grid command for $ref{$sRefName} $mapper{$sMapPro} in $fileName\n" if $command eq $mapCmd && !exists $grid{$ref{$sRefName}}{$mapper{$sMapPro}} && !exists $grid{$sGridCom}{$mapper{$sMapPro}};
+	close($in) if defined $fileName;
+}
+
+sub loadFeature
+{
+	my ($fileName) = @_;
+	my ($iFile, $iName, $iIsGene, $iID, $iSymbol, $iUniq, $iUse, $iChrom, $iStart, $iEnd, $iStrand, $iUp, $iDown, $iInfo, $iExonStart, $iExonEnd, $iCDSStart, $iCDSEnd, $iParameter) = 0..30;
+
+	print "Loading feature configuration from ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split(/[\t\r\n]/);
+		die "Wrong format in $fileName\n$_" if @a < 9;
+		my $fid = $a[$iID]; $fid .= ",$a[$iSymbol]" if $a[$iSymbol] && $a[$iSymbol] ne '.';
+		my $upstream = $a[$iUp  ] ne '.' ? $a[$iUp  ] : $stream;
+		my $dnstream = $a[$iDown] ne '.' ? $a[$iDown] : $stream;
+		push(@{$feat{ $a[$iName]   }}, getFile($featBase, $featConf, $a[$iFile]), $fid, @a[$iChrom..$iStrand],  0        );
+		push(@{$feat{"$a[$iName]up"}}, getFile($featBase, $featConf, $a[$iFile]), $fid, @a[$iChrom..$iStrand], -$upstream) if $upstream;
+		push(@{$feat{"$a[$iName]dn"}}, getFile($featBase, $featConf, $a[$iFile]), $fid, @a[$iChrom..$iStrand],  $dnstream) if $dnstream;
+		print "\t$a[$iName] $feat{$a[$iName]}[0] $fid @a[$iChrom..$#a]\n" if $verbose;
+		my $line;
+		map {die "Wrong format in $_\n$line" if !/^[\d,]+$/} @a[$iChrom..$iEnd];
+	}
+
+	close($in) if defined $fileName;
+	map {checkFiles($_->[0])} values %feat;
+}
+
+sub loadParameter
+{
+	my ($fileName, $flag) = @_;
+
+	print "Loading parameter file ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+	my @buf;
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split;
+		push(@buf, @a);
+	}
+
+	close($in) if defined $fileName;
+	@ARGV = $flag ? (@ARGV, @buf) : ($ARGV[0], @buf, @ARGV[1..$#ARGV]);
+	print "ARGV: @ARGV\n" if $verbose;
+}
+
+sub processJobLog
+{
+	exit if $noJobLog;
+
+	my $dir = -d $outDir ? $outDir : dirname($outDir);
+	my @files = <$dir/$jobLogFile.*>;
+
+	if (@files == 0)
+	{
+		$jobLogFile = "$dir/$jobLogFile.$$";
+		$jobLogHandle = openOutput($jobLogFile);
+		print $jobLogHandle "Version=$version\n";
+	}
+	else
+	{
+		die "\nThe last job has been imcomplete. Please use -resume to finish incomplete jobs\n" if !$resume;
+		die "\nCan't resume due to multiple job log files\n@files\n" if @files > 1;
+		$jobLogFile = $files[0];
+		loadJobLog($jobLogFile);
+		$jobLogHandle = openAppend($jobLogFile);
+	}
+	print "$$ $jobLogFile\n";
+}
+
+sub loadJobLog
+{
+	my ($fileName) = @_;
+	my @buf;
+
+	print "Loading job log file ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+	my $ver = <$in>;
+	die "$fileName doesn't start with Version=\n" if $ver !~ /^Version=(\S+)/;
+	die "$fileName was generated in version $1, but program version is $version\n" if $1 ne $version;
+
+	while (<$in>)
+	{
+		chop;
+		next if /^#/ || /^\s*$/;
+		my @a = split(/\s/, $_, 4);
+		$jobStatus{$a[3]} = $a[0] eq '>' ? 1 : 0;
+	}
+
+	close($in) if defined $fileName;
+}
+
+sub load
+{
+	my ($fileName) = @_;
+	my @ret;
+
+	print "Loading file ", $fileName || 'STDIN', " ...\n" if !$quiet;
+	my $in = openInput($fileName);
+
+	while (<$in>)
+	{
+		next if /^#/ || /^\s*$/;
+		my @a = split;
+		push(@ret, \@a);
+	}
+
+	close($in) if defined $fileName;
+	return @ret;
+}
+
+#-------------------------------------------------------------------------------
+
+sub openInput
+{
+	my ($fileName) = @_;
+
+	return *STDIN unless defined $fileName;
+
+	my ($fd);
+	open($fd, $fileName =~ /.gz(ip)?$/ ? "zcat $fileName |" : $fileName =~ /.bz(ip)?2$/ ? "bzcat $fileName |" : $fileName) || die("Open error: $fileName");
+	return $fd;
+}
+
+sub openOutput
+{
+	my ($fileName) = @_;
+
+	return *STDOUT unless defined $fileName;
+
+	my ($fd);
+	open($fd, $fileName =~ /.gz$/ ? "| gzip -c > $fileName" : $fileName =~ /.bz(ip)?2$/ ? "| bzip2 -z -c > $fileName" : ">$fileName") || die("Open error: $fileName");
+	return $fd;
+}
+
+sub openAppend
+{
+	my ($fileName) = @_;
+
+	return *STDOUT unless defined $fileName;
+
+	my ($fd);
+	open($fd, $fileName =~ /.gz$/ ? "| gzip -c >> $fileName" : $fileName =~ /.bz(ip)?2$/ ? "| bzip2 -z -c >> $fileName" : ">>$fileName") || die("Open error: $fileName");
+	return $fd;
+}
+
+sub dieif
+{
+	my ($cond, $format, @arr) = @_;
+	die "\n---------------------------------------------------------------\nERROR: " . sprintf($format, @arr) if $cond;
+}
+
+sub checkOptions
+{
+	$thread = 1 if !$thread;
+	$minMapQual = 0 if !defined $minMapQual;
+	$minBaseQual = 0 if !defined $minBaseQual;
+	$errRate = 0.05 if !defined $errRate;
+	$clipRate = 0.2 if !defined $clipRate;
+	$occ = 1 if !$occ;
+	$metCov = 5 if !defined $metCov;
+	$bases = 'CG:CH' if !defined $bases;
+	$project = 'all' if !$project;
+	$pearson = $pearson ? '--pearson' : '';
+	$spearman = $spearman ? '--spearman' : '';
+	$note = $note ? '--note' : '';
+	$metContext = 'cg' if !$metContext;
+	$nseq = 1000 if !$nseq;
+	$stream = 1000 if !defined $stream;
+	$geneSum = 1 if !defined $geneSum;
+	$infoFlag = $infoFlag ? '-s' : '';
+	$minCpG = 5 if !defined $minCpG;
+	$metDiff = $command eq $disCmd ? 0 : 0.25 if $command && !defined $metDiff;
+	$pvalue = 0.01 if !defined $pvalue;
+	$fdr = 0.05 if !defined $fdr;
+	$sdDiff = 2 if !defined $sdDiff;
+	$ttest    = $ttest    ? '--ttest'    : '';
+	$wilcoxon = $wilcoxon ? '--wilcoxon' : '';
+	$kstest   = $kstest   ? '--kstest'   : '';
+	$raoscott = $raoscott ? '--raoscott' : '';
+	$fisher   = $fisher   ? '--fisher'   : '';
+	$anova    = $anova    ? '--anova '   : '';
+	$ttest    = '--ttest' if !$ttest && !$wilcoxon && !$kstest && !$raoscott && !$fisher && !$anova;
+	$cucconi  = $cucconi  ? '--cucconi'   : '';
+	$lepage   = $lepage   ? '--lepage'   : '';
+	$ansari   = $ansari   ? '--ansari'   : '';
+	$vartest  = $vartest  ? '--vartest'  : '';
+	$lepage   = '--lepage' if !$cucconi && !$lepage && !$ansari && !$vartest;
+	$simulation = 2000 if !$simulation;
+	$topWindow = 500 if !$topWindow;
+	$distMethod = 'euclidean' if !$distMethod;
+	$linkMethod = 'complete' if !$linkMethod;
+	$smwin = 1000 if !$smwin;
+	$smgap = 300 if !$smgap;
+	$smloc = 70 if !$smloc;
+	$smtop = 20 if !$smtop;
+	$smlen = 0 if !$smlen;
+	$smquan = 0.25 if !$smquan;
+#	$mbed = 'cg,ch' if !$mbed && !$mwig && !$dwig;
+	$hierarchical = $hierarchical ? '--hierarchical'   : '';
+	$kmeans       = $kmeans       ? "--kmeans $kmeans" : '';
+	$pam          = $pam          ? "--pam $pam"       : '';
+	$hierarchical = '--hierarchical' if !$hierarchical && !$kmeans && !$pam;
+	$minReadLen = 0.5 if !$minReadLen;
+	$qual5 = 5 if !$qual5;
+	$qual3 = 5 if !$qual3;
+	$trim5 = 0 if !$trim5;
+	$trim3 = 0 if !$trim3;
+	$priority = 'U53DEI' if !$priority;
+	$cpgmps_ms = 0.7 if !defined $cpgmps_ms;
+	$cpgmps_mc = 3   if !defined $cpgmps_mc;
+	$cpgmps_us = 0.3 if !defined $cpgmps_us;
+	$cpgmps_uc = 3   if !defined $cpgmps_uc;
+	$cpgmps_dc = 4   if !defined $cpgmps_dc;
+	$cpgmps_v  = 0.4 if !defined $cpgmps_v;
+	$cpgmpsMem = 4   if !$cpgmpsMem;
+	$qdmrMem  = 4    if !$qdmrMem;
+	$qdmrSd   = 0.07 if !$qdmrSd;
+	$gseaMem   = 0.5        if !$gseaMem;
+	$gseaTop   = 20         if !$gseaTop;
+	$gseaMin   = 15         if !$gseaMin;
+	$gseaMax   = 500        if !$gseaMax;
+	$gseaPerm  = 1000       if !$gseaPerm;
+	$gseaScore = 'weighted' if !$gseaScore;
+	$gseaNorm  = 'meandiv'  if !$gseaNorm;
+	$postDmr  = 1  if !defined $postDmr;
+	$methcloneCov   = 60  if !defined $methcloneCov;
+	$methcloneDist  = 72  if !defined $methcloneDist;
+	$methcloneDiff  =  0  if !defined $methcloneDiff;
+
+	if ($helpFlag || !$command || $wrong)
+	{
+		warn("Command $command is not supported\n\n") if $command && $wrong;
+		die("bspipe: BS-seq analysis pipeline (version $version)\n"
+		  . "Arguments: [-arg file] [-oarg file] command [options]\n"
+		  . "           -arg  file    file for arguments\n"
+		  . "           -ignore       ignore following arguments\n\n"
+		  . "Command:   index         index reference sequences\n"
+		  . "           sample        prepare sample configuration file\n"
+		  . "           mapping       map sequence reads\n"
+		  . "           methylation   measure methylation for given cytosine context\n"
+		  . "           pair          merge mapping results for paired sequencing\n"
+		  . "           merge         merge mapping results for replicates\n"
+		  . "           join          join methylation from mapping results\n"
+		  . "           split         split methylation file\n"
+		  . "           group         measure group methylation\n"
+		  . "           diff          measure methylation difference\n"
+		  . "           correlate     correlation of CpG methylation\n"
+		  . "           pca           principal component analysis\n"
+		  . "           window        measure window methylation for genome\n"
+		  . "           feature       measure window methylation for features\n"
+		  . "           dmr           perform statistical tests for differential methylation among groups\n"
+		  . "           dispersion    perform statistical tests for methylation dispersion among groups\n"
+		  . "           clustering    perform unsupervised clustering\n"
+		  . "           annotate      annotate CpGs, windows, or DMRs\n"
+		  . "           david         perform david analysis for DMRs\n"
+		  . "           gsea          perform gsea analysis for DMRs\n"
+		  . "           vis           generate input files for UCSC genome browser\n"
+		  . "           box           generate box plots for DNA methylation\n"
+		  . "           bsqc          assess quality for sequencing library\n"
+		  . "           mcqc          assess quality for methylation and coverage\n"
+		  . "           cpgmps        run CpG_MPs\n"
+		  . "           qdmr          run QDMR\n"
+		  . "           bsmooth       run BSmooth\n"
+		  . "           methclone     run methclone\n"
+		  . "           batch         run commands for mapping, cor, pca, window, dmr, clustering, annotate, david, gsea, and vis\n"
+		  . "\n"
+		  );
+	}
+
+	if ($command eq $batCmd && (!$dmrLevel || ($dmrLevel ne $dmrNone && $dmrLevel ne $dmrAll && $dmrLevel ne $dmrSite && $dmrLevel ne $dmrWindow)))
+	{
+		warn("Arguments:   batch [options] -o out_dir\n"
+		  . "\t-dmr           string   differential methylation level: none, site, window, or all\n"
+		  . "\t-from-join              process a batch job from join methylation scores\n"
+		  . "\t-from-profile           process a batch job from profile analyses\n"
+		  . "\t-from-dmr               process a batch job from DMR detection\n"
+		  . "\t-no-post-dmr            do not run DAVID and GSEA\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$dmrLevel, $dmrLevelErrMsg);
+		dieif($dmrLevel ne $dmrNone && $dmrLevel ne $dmrAll && $dmrLevel ne $dmrSite && $dmrLevel ne $dmrWindow, $dmrWrongErrMsg, $dmrLevel);
+	}
+
+	if ($command eq $indCmd && (!$outDir || !$inDir || !$mapConf))
+	{
+		warn("Arguments:   index [options] -o out_dir -i fasta_file -mc mapping_conf\n"
+		  . "\t-i    file    a reference FASTA file\n"
+		  . "\t-o    dir     output directory\n"
+		  . "\t-mc   file    mapping configuration file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-bc   file    RRBS configuration file\n"
+		  . "\t-gc   file    grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$mapConf, $mapConfErrMsg);
+	}
+
+	if ($command =~ /^$mapCmd|$batCmd/ && (!$outDir || !$mapConf || (!$samConf && (defined $inDir ^ defined $mapMode)) || !$refConf))
+	{
+		warn("Arguments:   mappping [options] -o out_dir -mc mapping_conf -rc reference_conf <-sc sample_conf | -i fastq_file -mm <1|2|a>>\n"
+		  . "\tSpecify either a sample configuration file\n"
+		  . "\t             or a FASTQ file and mapping mode\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-i           file    FASTQ file\n"
+		  . "\t-mm          int     1 for single read and paired-end read 1\n"
+		  . "\t                     2 for paired-end read 2\n"
+		  . "\t                     a for other sequencing protocol\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t-mc          file    mapping configuration file\n"
+		  . "\t-rc          file    reference configuration file generated by the index command\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-rl[en]      int     minimum length or rate of reads after cleaning  [$minReadLen]\n"
+		  . "\t-qual5       int     trim left end with < base quality score         [$qual5]\n"
+		  . "\t-qual3       int     trim right end with < base quality score        [$qual3]\n"
+		  . "\t-trim5       int     trim N left bases of reads before mapping       [$trim5]\n"
+		  . "\t-trim3       int     trim N right bases of reads before mapping      [$trim3]\n"
+		  . "\t-mq          int     minimum mapping quality score                   [$minMapQual]\n"
+		  . "\t-e[rror]     float   error rate of mapped reads                      [$errRate]\n"
+		  . "\t-clip        float   clipping rate of mapped reads                   [$clipRate]\n"
+		  . "\t-multi       float   retain multiply mapped reads\n"
+#		  . "\t-c[overage]  int     minimum read coverage for CpGs [$metCov]\n"
+		  . "\t-bq          int     minimum base quality score for cytosines        [$minBaseQual]\n"
+		  . "\t-nt          string  nucleotides to follow cytosine                  [$bases]\n"
+		  . "\t-sb          dir     base directory for sample files\n"
+		  . "\t-rb          dir     base directory for reference files\n"
+		  . "\t-tab[seq]            anayze TAB-seq\n"
+		  . "\t-oxbs[seq]           anayze OxBS-seq\n"
+		  . "\t-bc          file    RRBS configuration file\n"
+		  . "\t-t[hread]    int     number of thread                                [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  . "\t-ns[eq]      int     number of sequences to check quality score type [$nseq]\n"
+		  . "\t-tmp         dir     temporary directory\n"
+		  . "\t-leave               leave intermediate files\n"
+		  . "\t-force               overwrite existing files\n"
+		  . "\t-resume              resume the last jobs\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$mapConf, $mapConfErrMsg);
+		dieif(!$samConf && (defined $inDir ^ defined $mapMode), $inMapErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+	}
+
+	if ($command =~ /^$metCmd/ && (!$outDir || !$inDir || !$samConf || !$refConf))
+	{
+		warn("Arguments:   met [options] -i mapping_dir -o out_dir -sc sample_conf -rc ref_conf\n"
+		  . "\t-i           file    the output directory of the mapping command\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-rc          file    reference configuration file generated by the index command\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-nt          string  nucleotides to follow cytosine                  [$bases]\n"
+		  . "\t-bq          int     minimum base quality score for cytosines        [$minBaseQual]\n"
+		  . "\t-rb          dir     base directory for reference files\n"
+		  . "\t-t[hread]    int     number of thread                                [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+#		  . "\t-tmp         dir     temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inDirErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+	}
+
+	if ($command eq $paiCmd && (!$outDir || !$inDir || !$refConf))
+	{
+		warn("Arguments:   pair [options] -rc reference_conf -o out_dir -i in1_prefix [-j in2_prefix]>\n"
+		  . "\t-i         string  prefix of input file 1\n"
+		  . "\t-j         string  prefix of input file 2\n"
+		  . "\t-o         dir     output directory\n"
+		  . "\t-rc        file    reference configuration file generated by the index command\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-rb        dir     base directory for reference files\n"
+		  . "\t-t[hread]  int     number of thread                                  [$thread]\n"
+		  . "\t-gc        file    grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+	}
+
+	if ($command eq $merCmd)
+	{
+		push(@merFiles, @ARGV);
+		if ($samConf ? !$inDir : (!@merFiles || !$outDir) || !$refConf)
+		{
+			warn("Arguments:   merge [options] -rc reference_conf\n"
+			  . "\tSpecify either -i mapping_dir [-o out_dir] -sc sample_conf [-group]\n"
+			  . "\t           or  -o out_prefix in1_prefix in2_prefix [in3_prefix ...]\n"
+			  . "\t-i         dir     the output directory of the mapping command\n"
+			  . "\t-sc        file    sample configuration file\n"
+			  . "\t-group             merge samples for groups in sample configuration file\n"
+			  . "\t                   if not specificed, merge replicates for samples in sample configuration file\n"
+			  . "\t-o         dir     output directory or prefix\n"
+			  . "\t-rc        file    reference configuration file generated by the index command\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-rb        dir     base directory for reference files\n"
+			  . "\t-t[hread]  int     number of thread                                  [$thread]\n"
+			  . "\t-gc        file    grid configuration\n"
+			  . "\t all files are merged if no parameters below are specifed\n"
+			  . "\t-bam               merge bam files\n"
+			  . "\t-bed               merge bed files\n"
+			  . "\t-log               merge log files\n"
+			  . "\t-sum               merge summary files\n"
+			  );
+			dieif($samConf && !$inDir, $inMerErrMsg1);
+			dieif(!$samConf && (!@merFiles || !$outDir), $inMerErrMsg2);
+			dieif(!$refConf, $refConfErrMsg);
+		}
+	}
+
+	if ($command =~ /^$joiCmd|$batCmd/ && (!$outDir || ($command eq $joiCmd && !$inDir) || !$samConf || !$refConf))
+	{
+		warn("Arguments:   join [options] -i mapping_dir -o out_dir -sc sample_conf -rc ref_conf\n"
+		  . "\t-i           file    the output directory of the mapping command\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-rc          file    reference configuration file generated by the index command\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-cc          string  Any cytosine context                           [$metContext]\n"
+		  . "\t                     e.g.,  cg, scg, ch, chg, chh, hcg, or cgh\n"
+		  . "\t-c[overage]  int     minimum read coverage for CpGs                 [$metCov]\n"
+		  . "\t-p[roject]   string  project name                                   [$project]\n"
+		  . "\t-discard     name    RRBS name in reference configuration file to discard cytosines present in digestion sites\n"
+		  . "\t-rb          dir     base directory for reference files\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  . "\t-tmp         dir     temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $joiCmd && !$inDir, $inDirErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+	}
+
+	if ($command eq $splCmd && (!$outDir || !$inDir))
+	{
+		warn("Arguments:   split [options] -i methy_file -o out_dir\n"
+		  . "\t-i           file    the output file of the join, window, or feature command\n"
+		  , "\t                     i.e., *.methy.gz or *.nread.gz\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-cc          string  Any cytosine context                           [$metContext]\n"
+		  . "\t                     e.g.,  cg, scg, ch, chg, chh, hcg, or cgh\n"
+#		  . "\t-t           int     number of thread                               [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+#		  . "\t-tmp         dir     temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+	}
+
+	if ($command =~ /^$corCmd|$batCmd/ && (!$outDir || ($command eq $corCmd && !$inDir)))
+	{
+		warn("Arguments:   correlate [options] -i methyl_file -o out_dir\n"
+		  . "\t-i           file    the output file of the join, window, or feature command\n"
+		  , "\t                     i.e., *.methy.gz or *.nread.gz\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-pearson             calculate Pearson correlation coefficient\n"
+		  . "\t-spearman            calculate Spearman correlation coefficient\n"
+		  . "\t-nonote              hide correlation coefficient in cells\n"
+		  . "\t-cw          int     minimum number of CpGs in a window                  [$minCpG]\n"
+		  . "\t-link        string  linkage metric: complete, average, single,\n"
+		  . "\t                                     median, ward, mcquitty, or centroid [$linkMethod]\n"
+		  . "\t-width       int     image width\n"
+		  . "\t-height      int     image height\n"
+		  . "\t-pdf                 generate PDF files instead of PNG files\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $corCmd && !$inDir, $inFileErrMsg);
+	}
+
+	if ($command =~ /^$pcaCmd|$batCmd/ && (!$outDir || ($command eq $pcaCmd && !$inDir)))
+	{
+		warn("Arguments:   pca [options] -i methyl_file -o out_dir\n"
+		  . "\t-i           file    the output file of the join, window, or feature command\n"
+		  , "\t                     i.e., *.methy.gz or *.nread.gz\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-pch         char    plotting character for points                   [1]\n"
+		  . "\t-legend      string  either bottom, bottomleft, left, topleft, top\n"
+		  . "\t                            topright, right, bottomright, or center  [topright]\n"
+		  . "\t-cw          int     minimum number of CpGs in a window              [$minCpG]\n"
+		  . "\t-scale               scale to have unit variance\n"
+		  . "\t-width       int     image width\n"
+		  . "\t-height      int     image height\n"
+		  . "\t-pdf                 generate PDF files instead of PNG files\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $pcaCmd && !$inDir, $inFileErrMsg);
+	}
+
+	if ($command =~ /^$winCmd|$batCmd/ && (!$outDir || ($command eq $winCmd && !$inDir) || !$samConf || !$window || !$step || !$refConf))
+	{
+		warn("Arguments:   window [options] -i mapping_dir -o out_dir -sc sample_conf -rc reference_conf\n"
+		  . "\t-i           dir     the output directory of the mapping command\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-rc          file    reference configuration file generated by the index command\n"
+		  . "\t-w[indow]    int     window size in bp\n"
+		  . "\t-st[ep]      int     step size in bp\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-cc          string  Any cytosine context                      [$metContext]\n"
+		  . "\t                     e.g.,  cg, scg, ch, chg, chh, hcg, or cgh\n"
+		  . "\t-p[roject]   string  project name                              [$project]\n"
+		  . "\t-c[overage]  int     minimum read coverage for CpGs            [$metCov]\n"
+		  . "\t-discard     name    RRBS name in reference configuration file to discard cytosines present in digestion sites\n"
+		  . "\t-rb          dir     base directory for reference files\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  . "\t-tmp         dir     temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $winCmd && !$inDir, $inDirErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+		dieif(!$window, $winErrMsg);
+		dieif(!$step, $stepErrMsg);
+	}
+
+	if ($command eq $feaCmd && (!$outDir || !$inDir || !$samConf || !$refConf || !$featConf || ($window && !$step)))
+	{
+		warn("Arguments:   feature [options] -i mapping_dir -o out_dir -sc sample_conf -rc reference_conf -fc feature_conf\n"
+		  . "\t-i           dir     the output directory of the mapping command\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-rc          file    reference configuration file generated by the index command\n"
+		  . "\t-fc          file    feature configuration file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-cc          string  Any cytosine context                      [$metContext]\n"
+		  . "\t                     e.g.,  cg, scg, ch, chg, chh, hcg, or cgh\n"
+		  . "\t-w[indow]    int     window size in bp. Use 0 for the entire region of features\n"
+		  . "\t-st[ep]      int     step size in bp\n"
+		  . "\t-p[roject]   string  project name                              [$project]\n"
+		  . "\t-c[overage]  int     minimum read coverage for CpGs            [$metCov]\n"
+		  . "\t-str[eam]    int     upstream and downstream size in bp        [$stream]\n"
+		  . "\t-discard     name    RRBS name in reference configuration file to discard cytosines present in digestion sites\n"
+		  . "\t-rb          dir     base directory for reference files\n"
+		  . "\t-fb          dir     base directory for feature files\n"
+		  . "\t-t[hread]    int     number of thread                          [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  . "\t-tmp         dir     temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+		dieif(!$featConf, $featConfErrMsg);
+		dieif($window & !$step, $stepErrMsg);
+	}
+
+	if ($command =~ /^$dmrCmd|$batCmd/ && (!$outDir || ($command eq $dmrCmd && !$inDir) || !$samConf))
+	{
+		warn("Arguments:   dmr [options] -i in_file -o out_dir -sc sample_conf\n"
+		  . "\t-i         fie       the output file of the join, window, or feature command\n"
+		  . "\t                     e.g.,*.methy.gz or *.nread.gz\n"
+		  . "\t-o         dir       output directory\n"
+		  . "\t-sc        file      sample configuration file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-rpath     file      the path of Rscript\n"
+		  . "\t-pc        file      pair configuration file\n"
+		  . "\t-cw        int       minimum number of CpGs in a window                  [$minCpG]\n"
+		  . "\t-md        float     minimal methylation difference                      [$metDiff]\n"
+		  . "\t-pv[alue]  float     cutoff of p-value                                   [$pvalue]\n"
+		  . "\t-fdr       float     cutoff of FDR                                       [$fdr]\n"
+		  . "\t-tw        int       number of windows for heatmaps                      [$topWindow]\n"
+		  . "\t-paired              paired test for t-test and wilcoxon test\n"
+		  . "\t-ttest               student T test\n"
+		  . "\t-wilcoxon            Wilcoxon rank sum test\n"
+		  . "\t-kstest              Kolmogorov–Smirnov test\n"
+		  . "\t-raoscott            Rao-Scott chi-square test\n"
+		  . "\t-anova               ANOVA test\n"
+		  . "\t-fisher              pairwise Fisher's exaxt test\n"
+		  . "\t-format    string    file format is either site, methy, or nread         [auto]\n"
+		  . "\t-filter              filter based on methylation difference before statistical tests\n"
+		  . "\t-fraction  float     filter based on sample fraction in each group before statistical tests\n"
+		  . "\t-dist      string    distance metric: euclidean, maximum, manhattan,\n"
+		  . "\t                                      canberra, binary, or minkowski     [$distMethod]\n"
+		  . "\t-link      string    linkage metric: complete, average, single,\n"
+		  . "\t                                     median, ward, mcquitty, or centroid [$linkMethod]\n"
+		  . "\t-width     int       image width\n"
+		  . "\t-height    int       image height\n"
+		  . "\t-pdf                 generate PDF files instead of PNG files\n"
+		  . "\t-t         int       number of thread                                    [$thread]\n"
+		  . "\t-gc        file      grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $dmrCmd && !$inDir, $inDirErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+	}
+
+	if ($command eq $disCmd && (!$outDir || !$inDir || !$samConf))
+	{
+		warn("Arguments:   dis [options] -i in_file -o out_dir -sc sample_conf\n"
+		  . "\t-i          fie       the output file of the join, window, or feature command\n"
+		  . "\t                      e.g.,*.methy.gz or *.nread.gz\n"
+		  . "\t-o          dir       output directory\n"
+		  . "\t-sc         file      sample configuration file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-rpath      file      the path of Rscript\n"
+		  . "\t-pc         file      pair configuration file\n"
+		  . "\t-cw         int       minimum number of CpGs in a window                  [$minCpG]\n"
+#		  . "\t-md         float     minimal methylation difference                      [$metDiff]\n"
+		  . "\t-pv[alue]   float     cutoff of p-value                                   [$pvalue]\n"
+		  . "\t-fdr        float     cutoff of FDR                                       [$fdr]\n"
+		  . "\t-tw         int       number of windows for heatmaps                      [$topWindow]\n"
+#		  . "\t-paired               paired test for t-test and wilcoxon test\n"
+		  . "\t-cucconi              Cucconi test\n"
+		  . "\t-lepage               Lepage test\n"
+		  . "\t-ansari               Ansari-Bradley test\n"
+		  . "\t-vartest              variance test\n"
+		  . "\t-format     string    file format is either site, methy, or nread         [auto]\n"
+		  . "\t-simulation int       the number of iteration for simulation              [$simulation]\n"
+		  . "\t-filter               filter based on methylation difference before statistical tests\n"
+		  . "\t-fraction   float     filter based on sample fraction in each group before statistical tests\n"
+		  . "\t-dist       string    distance metric: euclidean, maximum, manhattan,\n"
+		  . "\t                                       canberra, binary, or minkowski     [$distMethod]\n"
+		  . "\t-link       string    linkage metric: complete, average, single,\n"
+		  . "\t                                      median, ward, mcquitty, or centroid [$linkMethod]\n"
+		  . "\t-width      int       image width\n"
+		  . "\t-height     int       image height\n"
+		  . "\t-pdf                  generate PDF files instead of PNG files\n"
+		  . "\t-t          int       number of thread                                    [$thread]\n"
+		  . "\t-gc         file      grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inDirErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+	}
+
+	if ($command eq $groCmd && (!$outDir || !$inDir || (!$samConf && !$groupFile)))
+	{
+		warn("Arguments:   group [options] -i methyl_file -o out_file <-sc sam_conf | -gf group_inf>\n"
+		  . "Specify either sample configuration file or group information file\n"
+		  . "\t-sc        file      sample configuration file\n"
+		  . "\t-gf        file      group information file with sample and group names\n"
+		  . "\t-i         file      the output file of the join command\n"
+		  , "\t                     i.e., *.methy.gz\n"
+		  . "\t-o         file      output file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-gc        file      grid configuration\n"
+		  );
+		dieif(!$outDir, $outFileErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$samConf && !$groupFile, $groupInfoErrMsg);
+	}
+
+	if ($command eq $difCmd && (!$outDir || !$inDir || ($inAnother ? !$refConf : -d $inDir ? (!$pairConf || !$refConf) : !(defined $pairConf ^ (defined $name1 && defined $name2)))))
+	{
+		warn("Arguments:   diff [options] -i methyl_file -o out_file <-pc pair_conf | -name1 sample_name -name2 sample_name>\n"
+		  .  "             diff [options] -i mapping_dir -o out_dir [-cc] -rc ref_conf [-rb] -pc pair_conf\n"
+		  .  "             diff [options] -i bed_file -j bed_file -o out_file -rc ref_conf\n"
+		  . "\t1. For methylation file which is the output of the join command, i.e., *.methy.gz\n"
+		  . "\t     -o         file      output file\n"
+		  . "\t     Specify either a pair configuration file or two sample names\n"
+		  . "\t     -pc        file      pair configuration file\n"
+		  . "\t     -name1     string    sample name 1\n"
+		  . "\t     -name2     string    sample name 2\n"
+		  . "\t2. For mapping directory which is the output of the mapping command, e.g., mapping\n"
+		  . "\t     -o         dir       output directory\n"
+		  . "\t     -pc        file      pair configuration file with two sample names and optionally pair_name\n"
+		  . "\t     -rc        file      reference configuration file generated by the index command\n"
+		  . "\t3. For bed files which are the output of the mapping command, e.g., cg.$bedExt\n"
+		  . "\t     -o         file      output file\n"
+		  . "\t     -rc        file      reference configuration file generated by the index command\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t     -cc        string    Any cytosine context           [$metContext]\n"
+		  . "\t                          e.g., cg, scg, ch, chg, chh, hcg, or cgh\n"
+		  . "\t     -rb        dir       base directory for reference files\n"
+		  . "\t     -gc        file      grid configuration\n"
+		  );
+		dieif(!$outDir, $outFileErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		if ($inAnother)
+		{
+			dieif(!$refConf, $refConfErrMsg);
+		}
+		elsif (-d $inDir)
+		{
+			dieif(!$pairConf, $pairConfErrMsg);
+			dieif(!$refConf, $refConfErrMsg);
+		}
+		else
+		{
+			dieif(!(defined $pairConf ^ (defined $name1 && defined $name2)), $pairInfoErrMsg);
+		}
+	}
+
+	if ($command =~ /^$cluCmd|$batCmd/ && (!$outDir || ($command eq $cluCmd && !$inDir)))
+	{
+		warn("Arguments:   clustering [options] -i methyl_file -o out_dir\n"
+		  . "\t-i               file    the output file of the join, window, or feature command\n"
+		  , "\t                         i.e., *.methy.gz or *.nread.gz\n"
+		  . "\t-o               dir     output directory\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-hier[archical]          perform hierarchical clustering\n"
+		  . "\t-kmeans          int     perform k-means clustering and generate k clusters\n"
+		  . "\t-pam             int     perform PAM clustering and generate k clusters\n"
+		  . "\t-cw              int     minimum number of CpGs in a window                  [$minCpG]\n"
+		  . "\t-md              float   minimal methylation difference                      [$metDiff]\n"
+		  . "\t-sd              float   minimal standard deviation of methylation           [$sdDiff]\n"
+		  . "\t-tc              int     number of sites or windows for clustering\n"
+		  . "\t-sc              file    sample configuration file for group colors\n"
+		  . "\t-dist            string  distance metric: euclidean, maximum, manhattan,\n"
+		  . "\t                                          canberra, binary, or minkowski     [$distMethod]\n"
+		  . "\t-link            string  linkage metric: complete, average, single,\n"
+		  . "\t                                         median, ward, mcquitty, or centroid [$linkMethod]\n"
+		  . "\t-width           int     image width\n"
+		  . "\t-height          int     image height\n"
+		  . "\t-pdf                     generate PDF files instead of PNG files\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc              file    grid configuration\n"
+#		  . "\t-tmp dir: temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $cluCmd && !$inDir, $inFileErrMsg);
+	}
+
+	if ($command =~ /^$visCmd|$batCmd/)
+	{
+		if (!$outDir || ($command eq $visCmd && (!$inDir && !@ARGV)) || !$refConf || (!$bamFlag && !$cwigFlag && !defined $mbed && !defined $mwig && !defined $dwig))
+		{
+			warn("Arguments:   vis [options] -rc reference_conf -o out_dir -i mapping_dir\n"
+			  .  "             vis [options] -rc reference_conf -o out_dir in_file1 [in_file2 ...]\n"
+			  . "\tSpecify either a mapping diretory or input files in BAM and BED\n"
+			  . "\t-o          dir      output directory\n"
+			  . "\t-i          dir      the output directory of the mapping command\n"
+			  . "\t-rc         file     reference configuration file generated by the index command\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-rb         dir       base directory for reference files\n"
+			  . "\t-url        string    base URL for UCSC track files or file path that has a url\n"
+			  . "\t-bam                  bam track file for alignments\n"
+			  . "\t-cwig                 bigwig track file for read depths\n"
+			  . "\t-mbed       string    bed file for DNA methylation\n"
+			  . "\t-mwig       string    bigwig track file for methylation profile\n"
+			  . "\t-dwig       string    bigwig track file for methylation difference\n"
+		     . "\t-cov        int       minimum read coverage for CpGs                            [$metCov]\n"
+		     . "\t-sc         file      process samples only in sample configuration file\n"
+			  . "\t-t[hread]   int       number of thread                                          [$thread]\n"
+			  . "\t-gc         file      grid configuration\n"
+			  . "\t-tmp        dir       temporary directory\n"
+			  );
+		}
+		dieif(!$outDir, $outDirErrMsg);
+		dieif($command eq $visCmd && (!$inDir && !@ARGV), $inVisErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+		dieif(!$bamFlag && !$cwigFlag && !defined $mbed && !defined $mwig && !defined $dwig, $visTypeErrMsg);
+		dieif(($bamFlag || $cwigFlag || $mwig || $dwig) && !$url4ucsc, $urlErrMsg);
+	}
+
+	if ($command =~ /^$annCmd|$batCmd/)
+	{
+		push(@annFiles, @ARGV) if $command ne $batCmd;
+		if (!$outDir || ($command eq $annCmd && !@annFiles) || !$annConf)
+		{
+			warn("Arguments:   annotate [options] -o out_dir -ac annotation_conf in_file1 [in_file2 ...]\n"
+			  . "\tinput files are tab separated files with reference, starting and end positions, and other columns\n"
+			  . "\t                   e.g., the output of the dmr command\n"
+			  . "\t-o         dir     output directory\n"
+			  . "\t-ac        file    annotation configuration file\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-ab        dir     base directory for annotation files\n"
+			  . "\t-score     int     column index or name used for gene summary and separation of hyper- and hypo-methylation\n"
+			  . "\t                   use 'diff' for the output of DMR\n"
+			  . "\t-hyper     float   create and annotate hyper-methylated sites or regions\n"
+			  . "\t-hypo      float   create and annotate hypo-methylated sites or regions\n"
+			  . "\t-nogene            do not generate gene summary\n"
+			  . "\t-priority  string  priority of categories for genes,               [$priority]\n"
+			  . "\t                   which is a combination of U(upstream), 5(5'UTR), E(exon), I(intron), 3(3'UTR), and D(downstream)\n"
+			  . "\t-str[eam]  int     upstream and downstream size in bp              [$stream]\n"
+			  . "\t-info              summary based on score\n"
+			  . "\t-ext       list    comma separated file extensions\n"
+			  . "\t-t[hread]  int     number of thread                                [$thread]\n"
+			  . "\t-gc        file    grid configuration\n"
+			  . "\t-tmp       dir     temporary directory\n"
+			  );
+			dieif(!$outDir, $outDirErrMsg);
+			dieif($command eq $annCmd && !@annFiles, $inFilesErrMsg);
+			dieif(!$annConf, $annConfErrMsg);
+		}
+	}
+
+	if ($command eq $davCmd || ($command eq $batCmd && $postDmr))
+	{
+		push(@davFiles, @ARGV) if $command ne $batCmd;
+		if ((!$showID && !$showCat) && (($command eq $davCmd && !@davFiles) || !$outDir || !$davAccount || !$idType))
+		{
+			warn("Arguments:   david [options] -account account -o out_dir in_file1 [in_file2 ...]\n"
+			  . "\tinput files are gene summary files generated by the annotation command\n"
+			  . "\t                     e.g.,*.refseq.list.*\n"
+			  . "\t-o           dir     output directory\n"
+			  . "\t-account     string  user account to access DAVID web server\n"
+			  . "\t                     for registration, go to http://david.abcc.ncifcrf.gov/webservice/register.htm\n"
+			  . "\t-idtype      string  ID type in input files: GENBANK_ACCESSION for RefSeq, ENSEMBL_TRANSCRIPT_ID for Ensembl\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-tg          int     top N genes for analysis                                              [all]\n"
+			  . "\t-nitem       int     number of items shown in figures                                      [20]\n"
+			  . "\t-dval        string  value type shown in figures: pvalue, benjamini, bonferroni, or fdr    [pvalue]\n"
+			  . "\t-cat[egory]  list    functional caterogies for analysis\n"
+			  . "\t                     default: GO term, Panther, OMIM, Reactome, KEGG, BIND, DIP, and UCSC TFBS\n"
+			  . "\t-showid              show available ID types\n"
+			  . "\t-showcat             show available categories\n"
+			  . "\t-ext         list    comma separated file extensions\n"
+			  . "\t-t           int     number of thread                                                      [$thread]\n"
+			  . "\t-gc          file    grid configuration\n"
+			  . "\t-tmp         dir     temporary directory\n"
+			  );
+			dieif(!$outDir, $outDirErrMsg);
+			dieif($command eq $davCmd && !@davFiles, $inFilesErrMsg);
+			dieif(!$davAccount, $accErrMsg);
+			dieif(!$idType, $idTypeErrMsg);
+		}
+	}
+
+	if ($command eq $gseCmd || ($command eq $batCmd && $postDmr))
+	{
+		push(@gseaFiles, @ARGV) if $command ne $batCmd;
+		if (($command eq $gseCmd && !@gseaFiles) || !$outDir || !$gseaJar || !@gmtFiles)
+		{
+			warn("Arguments:   gsea [options] -o out_dir -gmt gmt_file -gsea_jar gsea.jar in_file1 [in_file2 ...]\n"
+			  . "\tinput files are gene summary files generated by the annotation command, e.g.,*.refseq.list.*\n"
+			  . "\t-o           dir     output directory\n"
+			  . "\t-gmt         file    gene set file in the GMX or GMT format\n"
+			  . "\t-gsea_jar    file    the path of gsea JAR file\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-gsea_min    int     gene sets smaller than this number are EXLCUDED from the analysis        [$gseaMin]\n"
+			  . "\t-gsea_max    int     gene sets larger than this number are EXLCUDED from the analysis         [$gseaMax]\n"
+			  . "\t-gsea_top    int     plot GSEA mountain and related plots for the top sets of each phenotype  [$gseaTop]\n"
+			  . "\t-gsea_perm   int     the number of permutations                                               [$gseaPerm]\n"
+			  . "\t-gsea_score  string  statistic used to score hits (gene set members) and misses (non-members) [$gseaScore]\n"
+			  . "\t                     classic,weighted,weighted_p2,weighted_p1.5\n"
+			  . "\t-gsea_norm   string  normalization method: None or meandiv                                    [$gseaNorm]\n"
+			  . "\t-ext         list    comma separated file extensions\n"
+			  . "\t-t           int     number of thread                                                         [$thread]\n"
+			  . "\t-gc          file    grid configuration\n"
+			  . "\t-force               keep running although errors occur\n"
+			  . "\t-tmp         dir     temporary directory\n"
+			  );
+			dieif(!$outDir, $outDirErrMsg);
+			dieif($command eq $gseCmd && !@gseaFiles, $inFilesErrMsg);
+			dieif(!$gseaJar, $gseaJarErrMsg);
+			dieif(!@gmtFiles, $inGmtErrMsg);
+		}
+	}
+
+	if ($command eq $cpgCmd && (!$outDir || !$inDir || !$samConf || !$refConf))
+	{
+		warn("Arguments:   cpgmps [options] -i mapping_dir -o out_prefix -sc sample_conf -rc ref_conf\n"
+		  . "\t-i           dir     the output directory of the mapping command\n"
+		  . "\t-o           prefix  output prefix\n"
+		  . "\t-sc          file    sample configuration file\n"
+		  . "\t-rc          file    reference configuration file generated by the index command\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-cc          string  Any cytosine context                                       [$metContext]\n"
+		  . "\t                     e.g.,  cg, scg, ch, chg, chh, hcg, or cgh\n"
+		  . "\t-c[overage]  int     minimum read coverage for CpGs                             [$metCov]\n"
+		  . "\t-discard     name    RRBS name in reference configuration file to discard cytosines present in digestion sites\n"
+		  . "\t-rb          dir     base directory for reference files\n"
+		  . "\t-cpgmps_uc   int     minimum number of CpGs for unmethylated hotspots           [$cpgmps_uc]\n"
+		  . "\t-cpgmps_us   float   minimum score of CpGs for unmethylated hotspots            [$cpgmps_us]\n"
+		  . "\t-cpgmps_mc   int     minimum number of CpGs for methylated hotspots             [$cpgmps_mc]\n"
+		  . "\t-cpgmps_ms   float   minimum score of CpGs for methylated hotspots              [$cpgmps_ms]\n"
+		  . "\t-cpgmps_dc   int     minimum number of CpGs for differential methylation        [$cpgmps_mc]\n"
+		  . "\t-cpgmps_v    float   cutoff for the reliability of methylation patterns of ORs  [$cpgmps_v]\n"
+		  . "\t-cpgmps_mem  float   memory required in gb                                      [$cpgmpsMem]\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  . "\t-tmp         dir     temporary directory\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+	}
+
+	if ($command eq $qdmCmd && (!$outDir || !$inDir))
+	{
+		warn("Arguments:   qdmr [options] -i methyl_file -o out_dir\n"
+		  . "\t-i           file    the output file of the join command\n"
+		  , "\t                     i.e., *.methy.gz\n"
+		  . "\t-o           dir     output directory\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-qsd         float   standard deviation of probability  model for DMR detection [$qdmrSd]\n"
+		  . "\t-qmem        float   memory required in gb                                      [$qdmrMem]\n"
+#		  . "\t-t int: number of thread [$thread]\n"
+		  . "\t-gc          file    grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+	}
+
+	if ($command eq $bsmCmd && (!$outDir || !$inDir || !$samConf))
+	{
+		warn("Arguments:   bsmooth [options] -i methyl_file -o out_dir -sc sample_conf\n"
+		  . "\t-i            file    the output file of the join command\n"
+		  , "\t                      i.e., *.methy.gz\n"
+		  . "\t-o            dir     output directory\n"
+		  . "\t-sc           file    sample configuration file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-pc           file    pair configuration file\n"
+		  . "\t-paired               paired test for t-test\n"
+		  . "\t-smw[indow]   int     minimum smoothing window, in bases            [$smwin]\n"
+		  . "\t-smg[ap]      int     maximum gap between two methylation loci,\n"
+		  . "\t                      before the smoothing is broken across the gap [$smgap]\n"
+		  . "\t-smloc        int     minimum number of CpGs in a smoothing window  [$smloc]\n"
+		  . "\t-c[overage]   int     minimum read coverage for CpGs                [$metCov]\n"
+		  . "\t-cw           int     minimum number of CpGs in a window            [$minCpG]\n"
+		  . "\t-md           float   minimal methylation difference                [$metDiff]\n"
+		  . "\t-smt[op]      int     number of windows for plot                    [$smtop]\n"
+		  . "\t-smlen[gth]   int     minimum length of a window                    [$smlen]\n"
+		  . "\t-smc[utoff]   float   cutoff of the t-statistics\n"
+		  . "\t-smq[uantile] float   in case smcutoff is NULL, compute the cutoff\n"
+		  . "\t                      using these quantiles of the t-statistic      [$smquan]\n"
+		  . "\t-width        int     image width\n"
+		  . "\t-height       int     image height\n"
+		  . "\t-pdf                  generate PDF files instead of PNG files\n"
+#		  . "\t-p[roject]  string  project name [$project]\n"
+		  . "\t-t            int     number of thread                              [$thread]\n"
+		  . "\t-gc           file    grid configuration\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$samConf, $samConfErrMsg);
+	}
+
+	if ($command eq $mclCmd && (!$outDir || !$inDir || (-d $inDir && (!$pairConf && (!$name1 || !$name2))) || !$refConf))
+	{
+		warn("Arguments:   methclone [options] -i mapping_dir -o out_dir -pc pair_conf [-sc sam_conf]\n"
+		  .  "             methclone [options] -i mapping_dir -o out_dir -sc sam_conf -name1 group1 -name2 group2\n"
+		  .  "             methclone [options] -i bam_file -j bam_file -o out_file\n"
+		  . "\t1. For mapping directory which is the output of the mapping command, e.g., mapping\n"
+		  . "\t     -o          dir       output directory\n"
+		  . "\t     -pc         file      pair configuration file with two sample or group names and optionally pair_name\n"
+		  . "\t     -sc         file      optional sample configuration file for all pairwise group comparisons\n"
+		  . "\t2. For mapping directory which is the output of the mapping command, e.g., mapping\n"
+		  . "\t     -o          dir       output directory\n"
+		  . "\t     -sc         file      sample configuration file for all pairwise group comparisons\n"
+		  . "\t     -name1      string    sample name 1\n"
+		  . "\t     -name2      string    sample name 2\n"
+		  . "\t3. For bam files which are the output of the mapping command, e.g., *.bam\n"
+		  . "\t     -o          file      output file\n"
+		  . "\t     -i          file      input bam file\n"
+		  . "\t     -j          file      input bam file\n"
+		  . "\tFor all ways, if bam files do not have XM tags, then conversion will executed.\n"
+		  . "\t     -rc         file      reference configuration file generated by the index command\n"
+		  . "\t     -rb         dir       optional base directory for reference files\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t     -mc_cov     int       minimum read coverage for CpGs               [$methcloneCov]\n"
+		  . "\t     -mc_dist    int       minimum distance between two CpGs            [$methcloneDist]\n"
+		  . "\t     -mc_diff    int       minimum percentage of methylation difference [$methcloneDiff]\n"
+		  . "\t     -mc_path    file      the path of methclone\n"
+		  . "\t     -leave                leave convered bam files\n"
+		  . "\t     -t          int       number of thread                             [$thread]\n"
+		  . "\t     -gc         file      grid configuration\n"
+		  );
+		dieif(!$outDir, $outFileErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+		if (!-d $inDir)
+		{
+			dieif(!$inAnother, $inAnotherErrMsg);
+		}
+		elsif ($pairConf)
+		{
+			dieif(!$pairConf, $pairConfErrMsg);
+		}
+		else
+		{
+			dieif(!$samConf, $samConfErrMsg);
+			dieif(!$name1, $samNameErrMsg);
+			dieif(!$name2, $samNameErrMsg);
+		}
+	}
+
+	if ($command eq $mloCmd && (!$outDir || !$inDir || (-d $inDir && (!$pairConf && (!$name1 || !$name2))) || !$refConf))
+	{
+		warn("Arguments:   mlogit [options] -i mapping_dir -o out_dir -pc pair_conf [-sc sam_conf]\n"
+		  .  "             mlogit [options] -i mapping_dir -o out_dir -sc sam_conf -name1 group1 -name2 group2\n"
+		  .  "             mlogit [options] -i bam_file -j bam_file -o out_file\n"
+		  . "\t1. For mapping directory which is the output of the mapping command, e.g., mapping\n"
+		  . "\t     -o          dir       output directory\n"
+		  . "\t     -pc         file      pair configuration file with two sample or group names and optionally pair_name\n"
+		  . "\t     -sc         file      optional sample configuration file for all pairwise group comparisons\n"
+		  . "\t2. For mapping directory which is the output of the mapping command, e.g., mapping\n"
+		  . "\t     -o          dir       output directory\n"
+		  . "\t     -sc         file      sample configuration file for all pairwise group comparisons\n"
+		  . "\t     -name1      string    sample name 1\n"
+		  . "\t     -name2      string    sample name 2\n"
+		  . "\t3. For bam files which are the output of the mapping command, e.g., *.bam\n"
+		  . "\t     -o          file      output file\n"
+		  . "\t     -i          file      input bam file\n"
+		  . "\t     -j          file      input bam file\n"
+		  . "\tFor all ways, if bam files do not have XM tags, then conversion will executed.\n"
+		  . "\t     -rc         file      reference configuration file generated by the index command\n"
+		  . "\t     -rb         dir       optional base directory for reference files\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t     -ml_cov     int       minimum read coverage for CpGs               [$mlogitCov]\n"
+		  . "\t     -ml_dist    int       minimum distance between two CpGs            [$mlogitDist]\n"
+		  . "\t     -t          int       number of thread                             [$thread]\n"
+		  . "\t     -gc         file      grid configuration\n"
+		  );
+		dieif(!$outDir, $outFileErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$refConf, $refConfErrMsg);
+		if (!-d $inDir)
+		{
+			dieif(!$inAnother, $inAnotherErrMsg);
+		}
+		elsif ($pairConf)
+		{
+			dieif(!$pairConf, $pairConfErrMsg);
+		}
+		else
+		{
+			dieif(!$samConf, $samConfErrMsg);
+			dieif(!$name1, $samNameErrMsg);
+			dieif(!$name2, $samNameErrMsg);
+		}
+	}
+
+	if ($command eq $boxCmd && (!$outDir || !$inDir || !$boxTar))
+	{
+		warn("Arguments:   box [options] -tar target_file -i methyl_file -o out_prefix\n"
+		  . "\t-i            file    the output file of the join command\n"
+		  , "\t                      i.e., *.methy.gz\n"
+		  . "\t-o            dir     output directory\n"
+		  . "\t-tar[get]     file    list file for IDs and locations\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-id[first]            labels are in the first column in target file\n"
+		  . "\t-nocoord              input file has no coordinate\n"
+		  . "\t-percent              methylation values are percent\n"
+		  . "\t-ref[erence]  file    use sites in this file\n"
+		  . "\t-strand               draw stranded methylation\n"
+		  . "\t-save                 output drawn sites into an output file\n"
+		  . "\t-show         pos     show poition numbers\n"
+		  . "\t-show         num     show the number of sites\n"
+		  . "\t-show         na      show sites with missing values\n"
+		  . "\t-show         met     show legend for methylation level\n"
+		  . "\t-width        int     image width\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+		dieif(!$boxTar, $annConfErrMsg);
+	}
+
+	if ($command eq $samCmd && (!$outDir || !$inDir))
+	{
+		warn("Arguments:   sam [options] -i read_dir -o out_file\n"
+		  . "\t-i         dir     FASTQ file directory\n"
+		  . "\t-o         file    output file\n"
+		  . "\t----- optional parameters -------------------------------\n"
+		  . "\t-regex     file    specifies the regular expression to map sample to group\n"
+		  . "\t-full              include the path of FASTQ files\n"
+		  );
+		dieif(!$outDir, $outDirErrMsg);
+		dieif(!$inDir, $inFileErrMsg);
+	}
+
+	if ($command =~ /^$bsqCmd/)
+	{
+		push(@bsqcFiles, @ARGV) if !$samConf;
+		if (!$outDir || !($samConf ? $inDir : @bsqcFiles) || !$refConf)
+		{
+			warn("Arguments:   bsqc [options] -o out_dir -rc reference_conf -i mapping_dir -sc sample_conf\n"
+			  .  "             bsqc [options] -o out_dir -rc reference_conf bam_file1 [bam_file2 ...]\n"
+			  . "\tSpecify either a mapping diretory and sample configuration file\n"
+			  . "\t            or one or more BAM files\n"
+			  . "\t-i          dir      the output directory of the mapping command\n"
+			  . "\t-sc         file     sample configuration file\n"
+			  . "\t-o          dir      output directory\n"
+			  . "\t-rc         file     reference configuration file generated by the index command\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-rb         dir      base directory for reference files\n"
+			  . "\t-mq         int      minimum mapping quality score                   [$minMapQual]\n"
+			  . "\t-bq         int      minimum base quality score for cytosines        [$minBaseQual]\n"
+			  . "\t-redraw              redraw figure without reprocessing BAM files\n"
+#			  . "\t-key        string   key position: topleft, top, topright, left, center, right, bottomleft, bottom, or bottomright  [top]\n"
+			  . "\t-width      int      image width\n"
+			  . "\t-height     int      image height\n"
+			  . "\t-pdf                 generate PDF files instead of PNG files\n"
+			  . "\t-t[hread]   int      number of thread                                [$thread]\n"
+			  . "\t-gc         file     grid configuration\n"
+			  . "\t-tmp        dir      temporary directory\n"
+			  );
+			dieif(!$outDir, $outDirErrMsg);
+			dieif(!($samConf ? $inDir : @bsqcFiles), $inBsqcErrMsg);
+			dieif(!$refConf, $refConfErrMsg);
+		}
+	}
+
+	if ($command =~ /^$mcqCmd/)
+	{
+		push(@mcqcFiles, @ARGV) if !$samConf;
+		if (!$outDir || !($samConf ? $inDir : @mcqcFiles))
+		{
+			warn("Arguments:   mcqc [options] -o out_dir -i mapping_dir -sc sample_conf [-cc cg]\n"
+			  .  "             mcqc [options] -o out_dir bed_file1 [bed_file2 ...]\n"
+			  . "\tSpecify either a mapping diretory and cytosine context\n"
+			  . "\t            or one or more BED files\n"
+			  . "\t-o          dir      output directory\n"
+			  . "\t-i          dir      the output directory of the mapping command\n"
+			  . "\t-sc         file     sample configuration file\n"
+			  . "\t----- optional parameters -------------------------------\n"
+			  . "\t-cc         string  Any cytosine context                           [$metContext]\n"
+			  . "\t-width      int      image width\n"
+			  . "\t-height     int      image height\n"
+			  . "\t-pdf                 generate PDF files instead of PNG files\n"
+			  . "\t-t[hread]    int     number of thread                              [$thread]\n"
+			  . "\t-gc         file     grid configuration\n"
+			  );
+			dieif(!$outDir, $outDirErrMsg);
+			dieif(!($samConf ? $inDir : @mcqcFiles), $inMcqcErrMsg);
+		}
+	}
+
+	$noJobLog = 1 if $command eq $groCmd || ($command eq $difCmd && ($inAnother || !-d $inDir))|| (($command eq $mclCmd || $command eq $mloCmd) && $inAnother) || $command eq $samCmd;
+
+	# if -o specifies prefix, then create the parent directory
+	if ($command =~ /^$groCmd|$boxCmd|$samCmd|$cpgCmd/ || ($command =~ /^$merCmd/ && !$samConf) || ($command eq $difCmd && ($inAnother || !-d $inDir)) || (($command eq $mclCmd || $command eq $mloCmd) && $inAnother))
+	{
+		if (!-e dirname($outDir)) { mkdir(dirname($outDir)) || die("ERROR: Can't create $outDir\n"); }
+	}
+#	elsif ($command !~ /^$davCmd/)
+	elsif (!$showID && !$showCat)
+	{
+		if (!-e $outDir) { mkdir($outDir) || die("ERROR: Can't create $outDir\n"); }
+		elsif (!-d $outDir) { die "ERROR: Out directory exists as file\n" }
+	}
+	mkdir($tmpDir) || die("ERROR: Can't create $tmpDir\n") if $tmpDir && !-e $tmpDir;
+	$ENV{TMPDIR} = ($tmpDir || $ENV{TMPDIR} || '/tmp') . "/bspipe.$$";
+	mkdir($ENV{TMPDIR}) if !-e $ENV{TMPDIR} || die "ERROR: Can't create temporary dir: $ENV{TMPDIR}\n";
+
+	$mapConf  = getConfFile($mapConf ) if $mapConf;
+	$rrbsConf = getConfFile($rrbsConf) if $rrbsConf;
+	$gridConf = getConfFile($gridConf) if $gridConf;
+	$featConf = getConfFile($featConf) if $featConf;
+	$annConf  = getConfFile($annConf ) if $annConf;
+
+	chomp($url4ucsc = `cat $url4ucsc`) if $url4ucsc && -e $url4ucsc;
+}

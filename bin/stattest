@@ -1,0 +1,77 @@
+#!/bin/bash
+
+if [ -z $3 ]
+then
+	echo in_file out_dir sample.conf ...
+	exit -1
+fi
+
+in=$1
+shift
+out=$1
+shift
+sample=$1
+shift
+bin=`basename $in`
+base=`dirname $0`
+rpath=Rscript
+
+args=($@)
+for (( i=0; i<${#args[@]}; i++ ))
+do
+	case ${args[i]} in
+	--format)
+				format=${args[i+1]}
+				other="$other ${args[i]} $format"
+				let i++
+		;;
+	--simulation)
+				other2="$other2 ${args[i]} ${args[i+1]}"
+				let i++
+		;;
+	-fisher | --fisher) fisher=1
+		;;
+	-anova | --anova) anova=1
+		;;
+	-ttest | -wilcoxon | -kstest | -cucconi | -lepage | -ansari | -vartest | -paired)
+				other="$other -${args[i]}"
+		;;
+	--ttest | --wilcoxon | --kstest | --cucconi | --lepage | --ansari | --vartest | --paired)
+				other="$other ${args[i]}"
+		;;
+	-raoscott)
+				other="$other -${args[i]}"
+				raoscott=1
+		;;
+	--raoscott)
+				other="$other ${args[i]}"
+				raoscott=1
+		;;
+	-pairfile | --pairfile) pairfile="$pairfile ${args[i]} ${args[i+1]}"
+			let i++
+		;;
+	-rpath | --rpath) rpath=${args[i+1]}
+			let i++
+		;;
+	*)
+				common="$common ${args[i]}"
+	esac
+done
+
+if [ ! -z "$format" ] && [[ "$format" != "nread" ]]
+then
+	if [ ! -z "$fisher" ] 
+	then
+		echo "Specified format \"$format\" doesn't work with Fisher's exact test"
+		fisher=
+	fi
+	if [ ! -z "$raoscott" ] 
+	then
+		echo "Specified format \"$format\" doesn't work with Rao-Scott's test"
+		other="${other/ --raoscott/}"
+	fi
+fi
+
+if [ ! -z "$other"  ]; then $rpath $base/stattest.r    $in $out/${bin/.csv/} $sample $common $pairfile $other $other2 || exit $?; fi
+if [ ! -z "$fisher" ]; then $rpath $base/fisherGroup.r $in $out/${bin/.csv/} $sample $common $pairfile                || exit $?; fi
+if [ ! -z "$anova"  ]; then $rpath $base/anova.r       $in $out/${bin/.csv/} $sample $common                          || exit $?; fi

@@ -1,0 +1,74 @@
+#!/bin/bash
+
+if [ -z $4 ]
+then
+	echo "fai_file <out_dir mapping_dir pair_file mode | out_file bed_file_1 bed_file_2>"
+	exit -1
+fi
+
+fai=$1
+shift
+out=$1
+shift
+inOrBed=$1
+shift
+pairOrBed=$1
+shift
+mode=$1
+shift
+
+base=`dirname $0`
+
+
+compute()
+{
+	local _in1=$1
+	local _in2=$2
+	if [ -z $3 ]
+	then
+		local _out=_$in1-$_in2
+	else
+		local _out=${3%.gz}
+	fi
+
+	$base/join.pl -fai $fai -f 1,2,3 -v 4,5,6,7 -com $_in1 $_in2 -q | perl -ane '$t = $F[3] < $F[7] ? $F[3] : $F[7]; $b = $F[4]-$F[8]; printf "%s\t%s\t%s\t%s\t%.3f\t%c\t%d\n", @F[0..2], $t, $b, $F[5], int($t*$b+0.5) if !/^#/' | gzip -c > $_out.gz || exit $?
+}
+
+check()
+{
+	local _in=$1
+
+	if [ ! -e "$1" ]
+	then
+		echo "$1 doesn't exists"
+		exit -1
+	fi
+}
+
+if [ -d "$inOrBed" ]
+then
+	check "$pairOrBed"
+	if [ ! -e $out ]; then mkdir $out; fi
+
+	while read line
+	do
+		p=($line)
+		in1=`ls $inOrBed/${p[0]}*.$mode.bed.gz | grep "\\<${p[0]}\\."`
+		check "$in1"
+		in2=`ls $inOrBed/${p[1]}*.$mode.bed.gz | grep "\\<${p[1]}\\."`
+		check "$in2"
+
+		if (( ${#p[@]} < 3 ))
+		then
+			file=${p[0]}-${p[1]}
+		else
+			file=${p[2]}
+		fi
+		file=`basename $in1 | sed "s/${p[0]}/$file/"`
+
+		compute $in1 $in2 $out/$file
+	done < $pairOrBed
+else
+	compute $inOrBed $pairOrBed $out
+fi
+

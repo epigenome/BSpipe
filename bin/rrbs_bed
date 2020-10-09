@@ -1,0 +1,12 @@
+#!/bin/bash
+
+if [ -z $3 ]
+then
+	echo "seq_file site_seq out_file"
+	exit -1
+fi
+
+export PATH=`dirname $0`:$PATH
+
+fastDigestFull.pl -q -e $2 $1 | rrbs_cg.pl -q -e C-CGG | sortLocation.pl -bed -o $3
+

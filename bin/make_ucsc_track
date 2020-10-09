@@ -1,0 +1,57 @@
+#!/bin/bash
+
+if [ -z $3 ]
+then
+	echo out_dir db url in_file_1 ..
+	exit -1
+fi
+
+out=$1
+shift
+
+db=$1
+shift
+
+url=$1
+shift
+
+for f in $@
+do
+	g=`basename $f`
+	h=`echo $g | sed 's/\..\+$//'`
+
+	if [ `basename $g .bam` != $g ]
+	then
+		echo track visibility=squish db=$db type=bam name=\"$h bam\" description=\"$h\" bigDataUrl=$url/$g > $out/$g.ucsc
+	else
+	if [ `basename $g .metwig` != $g ] || [ `basename $g .mwig` != $g ]
+	then
+		echo track maxHeightPixels=50:50:50 color=255,0,0 altColor=0,255,0 autoScale=off viewLimits=-0.5:0.5 yLineMark=0 yLineOnOff=on visibility=full alwaysZero=on db=$db type=bigWig name=\"$h beta\" description=\"$h "(shifted by -0.5)"\" bigDataUrl=$url/$g > $out/$g.ucsc
+	else
+	if [ `basename $g .diffwig` != $g ] || [ `basename $g .dwig` != $g ]
+	then
+		echo track maxHeightPixels=50:50:50 color=255,165,0 altColor=0,200,0 autoScale=off viewLimits=-1:1 yLineMark=0 yLineOnOff=on visibility=full alwaysZero=on db=$db type=bigWig name=\"$h delta\" description=\"$h\" bigDataUrl=$url/$g > $out/$g.ucsc
+	else
+	if [ `basename $g .bigwig` != $g ] || [ `basename $g .bwig` != $g ]
+	then
+		echo track visibility=full alwaysZero=on db=$db type=bigWig name=\"$h depth\" description=\"$h\" bigDataUrl=$url/$g > $out/$g.ucsc
+	else
+	if [ `basename $g .bigbed` != $g ]
+	then
+		echo track visibility=squish db=$db type=bigBed name=\"$h bed\" description=\"$h\" bigDataUrl=$url/$g > $out/$g.ucsc
+	else
+	if [ `basename $g .bed` != $g ]
+	then
+		echo track visibility=squish db=$db type=bed name=\"$h bed\" description=\"$h\" | gzip -c > $out/$g.ucsc.gz
+		cat $f | gzip -c >> $out/$g.ucsc.gz
+	else
+		echo Unknown file type: $f
+		exit -1
+	fi
+	fi
+	fi
+	fi
+	fi
+	fi
+done
+

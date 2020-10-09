@@ -1,0 +1,41 @@
+#!/bin/bash
+
+if [ -z $3 ]
+then
+	echo fq_file number out_prefix
+	exit -1
+fi
+
+in=$1
+no=$2
+out=$3
+
+catx()
+{
+	if file -L "$in" 2>/dev/null | grep gzip >& /dev/null
+	then
+		zcat $in
+	else
+		cat $in
+	fi
+}
+
+total=`catx | wc -l`
+echo total=$total
+
+size=`echo "$total/$no"| bc`
+let size++
+if (( $size % 4 != 0 ))
+then
+	let "size = size + 4 - (size % 4)"
+fi
+echo size=$size
+
+if (( ${no:$digit-1:1} == 0 ))
+then
+	let no--
+fi
+digit=${#no}
+echo digit=$digit
+
+catx | split -d -l $size -a $digit - $out. || exit $?

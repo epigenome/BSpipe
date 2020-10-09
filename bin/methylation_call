@@ -1,0 +1,48 @@
+#!/bin/bash
+
+if [ -z $6 ]
+then
+	echo "ref cov min_base_qual bases bam [out_dir]"
+	exit -1
+fi
+
+ref=$1
+shift
+cov=$1
+shift
+bq=$1
+shift
+bases=$1
+shift
+in=$1
+shift
+out=$1
+shift
+if [ -z $out ]
+then
+	out=`dirname $in`
+else
+	if [ ! -d "$out" ]; then mkdir $out; fi
+fi
+out=$out/`basename $in`
+out=${out%.bam}
+
+export PATH=`dirname $0`:$PATH
+
+check_pipe()
+{
+	local status=($@)
+	for (( i=0; i<${#status[@]}; i++ ))
+	do
+		if (( ${status[$i]} != 0 ))
+		then
+			echo Exit code of command $i = ${status[$i]}
+			exit ${status[$i]}
+		fi
+	done
+}
+
+samtools view -h $in | msam2gff.pl -mq $bq -seq $ref -sam /dev/stdin -n $bases | mgff2bed.pl -q -m $cov -o $out -gzip
+
+check_pipe ${PIPESTATUS[@]}
+

@@ -1,0 +1,27 @@
+#!/bin/bash
+
+if [ -z $2 ]
+then
+	echo "in_file out_dir [-prefix prefix] [option]"
+	exit -1
+fi
+
+in=$1
+bin=`basename $in`
+shift
+out=$1
+shift
+
+if [[ "$1" == "-prefix" ]]
+then
+	bin=$2
+	shift
+	shift
+fi
+
+base=`dirname $0`
+
+if [ ! -e $out ]; then mkdir $out; fi
+
+Rscript $base/pca.r -i $in -o $out/${bin/.csv/} $@ || exit $?
+

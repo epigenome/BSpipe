@@ -1,0 +1,64 @@
+#!/bin/bash
+
+if [ -z $4 ]
+then
+	echo "mem in_file out_dir sd [path of QDMR.jar]"
+	exit -1
+fi
+
+mem=$1
+shift
+in=$1
+bin=`basename $in`
+shift
+out=$1
+shift
+sd=$1
+shift
+base=`dirname $0`
+
+if [ ! -z $CLASSPATH ]
+then
+	if echo $CLASSPATH | grep QDMR.jar >&/dev/null
+	then
+		path=`echo $CLASSPATH | perl -ne 'print $1 if /([^:]+QDMR.jar)/'`
+		flag=1
+	fi
+fi
+
+if [ -z $flag ]
+then
+	path=`which QDMR.jar 2>/dev/null`
+	if [ ! -z $path ]
+	then
+		flag=1
+	else
+		path=`locate QDMR.jar 2>/dev/null | head -n 1`
+		if [ ! -z $path ]
+		then
+			flag=1
+		else
+			flag=0
+		fi
+	fi
+fi
+
+if [[ "$flag" == "0" ]]
+then
+	echo Not found: QDMR.jar
+	exit -1
+fi
+
+if [ -z $path ]
+then
+	path=QDMR.jar
+fi
+
+
+if [ ! -e $out ]; then mkdir $out; fi
+
+
+tmp=$out/${bin%.gz}.gct
+$base/qdmr_input.pl $in $tmp || exit $?
+java -Xmx${mem}g -jar $path infile=$tmp,outfolder=$out,SD=$sd || exit $?
+

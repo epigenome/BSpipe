@@ -1,0 +1,67 @@
+#!/bin/bash
+
+if [ ! -z "$1" ] && [[ "$1" == "-shift" ]]
+then
+	delta=$2
+	shift
+	shift
+else
+	delta=0
+fi
+
+if [ ! -z "$1" ] && [[ "$1" == "-cov" ]]
+then
+	cov=$2
+	shift
+	shift
+fi
+
+if [ ! -z "$1" ] && [[ "$1" == "-diff" ]]
+then
+	ext=diffwig
+	shift
+else
+	ext=metwig
+fi
+
+if [ -z $3 ]
+then
+	echo [option] out_dir ref_seq_file bed_file_1 ..
+	echo "   " [-shift value] [-cov min_cov] for DNA methylation
+	echo "   " [-diff] for differential methylation
+	exit -1
+fi
+
+out=$1
+shift
+
+ref=$1
+shift
+
+catx()
+{
+	local in=$1
+
+	if file -L "$in" 2>/dev/null | grep gzip >& /dev/null
+	then
+		zcat $in
+	else
+		cat $in
+	fi
+}
+
+tmp=${TMPDIR-/tmp}
+
+for f in $@
+do
+	g=`basename $f`
+	g=${g/.gz/}
+	g=${g/.bed/}
+
+#	bedSort $f $tmp/bed2wig.$$
+#	catx $f | perl -ane "print join(\"\\t\", @F[0..1],\$F[1]+1, \$F[4]+$delta), \"\\n\" if '$cov' eq '' || \$F[3] >= '$cov'" | wigToBigWig /dev/stdin $ref $out/$g.$ext
+	catx $f | perl -ane "print join(\"\\t\", @F[0..1],\$F[1]+1, \$F[4]+$delta), \"\\n\" if '$cov' eq '' || \$F[3] >= '$cov'" > $tmp/bed2wig.$$
+	bedGraphToBigWig $tmp/bed2wig.$$ $ref $out/$g.$ext
+	rm $tmp/bed2wig.$$
+done
+

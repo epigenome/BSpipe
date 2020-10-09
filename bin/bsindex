@@ -1,0 +1,65 @@
+#!/bin/bash
+
+if [ -z $2 ]
+then
+	echo conf_file ref_file [out_dir]
+	exit -1
+fi
+
+conf=$1
+ref=$2
+out=${3-.}
+bref=`basename $ref`
+bbref=${bref%.fasta}
+bbref=${bref%.fas}
+bbref=${bbref%.fa}
+
+export PATH=`dirname $0`:$PATH
+
+if [ ! -e "$out" ]
+then
+	mkdir $out
+	if [ ! -e "$out" ]
+	then
+		echo "Can't create $out"
+		exit -1
+	fi
+fi
+
+if [[ "$(cd $(dirname $ref) && pwd)" != "$(cd $out && pwd)" ]]
+then
+	ln -fs $(cd $(dirname $ref) && pwd)/$(basename $ref) $out
+fi
+
+if [[ ! -s "$out/$bref.length" ]]
+then
+	fasta_length.pl $out/$bref $out/$bref.length || exit $?
+fi
+
+if [[ ! -s "$out/$bref.fai" ]]
+then
+	samtools faidx $out/$bref || exit $?
+fi
+
+if [[ ! -s "$out/$bbref.c.fa" ]] || [[ ! -s "$out/$bbref.g.fa" ]]
+then
+	fa_bisulfite.pl $ref $out/$bbref || exit $?
+fi
+
+. $conf || exit $?
+
+run()
+{
+	local _seq=$1
+	local _ref=$2
+	RUN=
+	if [ ! -z "$PROGRAM_DIR" ]; then RUN="$PROGRAM_DIR/"; fi
+	RUN="$RUN$INDEX"
+	RUN=${RUN//REF/$_ref}
+	RUN=${RUN//SEQ/$_seq}
+	$RUN
+}
+
+run $out/$bbref.c.fa $out/$bbref.c || exit $?
+run $out/$bbref.g.fa $out/$bbref.g || exit $?
+

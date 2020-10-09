@@ -1,0 +1,50 @@
+#!/bin/bash
+
+if [[ $1 =~ '^[0-9\.]+$' ]]
+then
+	mem=`perl -e "print int($1*1000)"`
+	mem="-Xmx${mem}m"
+	shift
+fi
+
+gsea=$1
+shift
+cmd="java $mem -cp $gsea xtools.gsea.GseaPreranked"
+
+if [[ "$1" == "-h" ]] || [[ "$1" == "-help" ]] || [[ "$1" == "--help" ]]
+then
+	$cmd -help
+	exit
+fi
+
+if (( $# < 3 ))
+then
+	echo "[mem_in_gb] gsea_jar [-h] out_dir rnk_file gmt_file .."
+	exit -1
+fi
+
+out=$1
+shift
+rnk=$1
+shift
+gmt=$1
+shift
+
+tmp=${TMPDIR-/tmp}/gsea.$$
+mkdir $tmp
+
+rnk2=$tmp/`basename $0`.rnk
+cut -f 1,4 $rnk > $rnk2
+
+$cmd -rnk $rnk2 -gmx $gmt -out $tmp -collapse false -rpt_label analysis $@
+code=$?
+rm -r `date +%b%d | tr A-Z a-z` >& /dev/null
+
+if (( $code == 0 ))
+then
+	mv $tmp/analysis.GseaPreranked.* $out
+else
+	mv $tmp/error_analysis.GseaPreranked.* $out
+fi
+
+exit $code

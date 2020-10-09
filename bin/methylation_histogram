@@ -1,0 +1,45 @@
+#!/bin/bash
+
+if [ -z $2 ]
+then
+	echo out_dir methy_file
+	exit -1
+fi
+
+out=$1
+shift
+[ -e $out ] || mkdir $out || exit $?
+
+export PATH=$PATH:`dirname $0`
+
+for f in $@
+do
+	g=`basename $f`
+	g=${g/.gz/}
+	g=${g/.methy/}
+
+	h=${g#*.}
+	if [ -z "$h" ]
+	then
+		echo the file name is not formated for bspipe
+		exit -1
+	fi
+
+	h=`echo $h | perl -ne 'print join("p", uc split(//))'`
+
+	no=`zcat $f | perl -ne '@a = split(/\t/); print @a+0; exit'`
+
+	if (( $no < 4 ))
+	then
+		echo $f has less than 4 columns
+		exit -1
+	fi
+
+	for (( i=4; i<=$no; i++ ))
+	do
+		t=`zcat $f | head -1 | cut -f $i`
+		zcat $f | perl -ane "print \"\$F[$i-1]\\n\" if !/^#/ && \$F[$i-1] ne 'NA'" | binHistogram.pl -xl 'methylation score' -yl $h -bin 0.01 -xmin 0 -xmax 1.01 -o $out/$t.methy -type png
+	done
+done
+
+

@@ -1,0 +1,89 @@
+#!/bin/bash
+
+if [ $1 == "-rrbs" ]
+then
+	rrbs=$2
+	shift
+	shift
+fi
+
+if [ -z ${11} ]
+then
+	echo "[-rrbs bed_file] mode ref in_dir out_dir cov met_score met_cpg unmet_score unmet_cpg diff_cpg v_value [mem]"
+	exit -1
+fi
+
+mode=$1
+shift
+ref=$1
+shift
+in=$1
+shift
+out=$1
+shift
+cov=$1
+shift
+metScore=$1
+metCount=$2
+unmScore=$3
+unmCount=$4
+difCount=$5
+vvalue=$6
+
+if [ ! -z $7 ]
+then
+	export JAVA_TOOL_OPTIONS=-Xmx$7g
+fi
+
+base=`dirname $0`
+tmpDir=${TMPDIR-/tmp}
+tmpPre="$tmpDir/$$.$mode"
+if [ ! -e "$tmpDir" ]; then mkdir $tmpDir || exit $?; fi
+
+catx()
+{
+	if file -L "$1" 2>/dev/null | grep gzip >& /dev/null
+	then
+		zcat $1
+	else
+		cat $1
+	fi
+}
+
+for f in $in/*.$mode.bed.gz
+do bedfiles="$bedfiles $f"
+done
+echo FILES: $bedfiles
+
+for f in $bedfiles
+do
+	g=`basename $f`
+	nf=$tmpPre.${g/bed.gz/filtered.bed.gz}
+
+	if [ ! -z "$rrbs" ]
+	then
+		$base/bed_filter.pl -e -f $rrbs $f -q
+	else
+		catx $f
+	fi | perl -ane "print join(\"\\t\", @F[0..1], '$mode', @F[4,6]), \"\\n\"" | gzip -c > $nf
+
+	files="$files $nf"
+done
+#echo FILES: $files
+
+`dirname $0`/cpgmps.pl -c `dirname $0`/class -d $cov -ms $metScore -mc $metCount -us $unmScore -uc $unmCount -dc $difCount -v $vvalue -s $ref -o $out $files
+
+if [ -d $out ]
+then
+	out2=$out/
+else
+	out2=$out.
+fi
+
+for f in $out2$$.$mode.*
+do
+	mv $f ${f/$$.$mode./}
+done
+
+rm $files
+

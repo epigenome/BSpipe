@@ -1,0 +1,97 @@
+#!/bin/bash
+
+if [ $1 == "-rrbs" ]
+then
+	rrbs=$2
+	shift
+	shift
+	ext=filtered.density.gz
+else
+	ext=density.gz
+fi
+
+if [ -z $8 ]
+then
+	echo [-rrbs bed_file] mode min_cov ref_fai in_dir out_dir window step project [sample.conf]
+	exit -1
+fi
+
+mode=$1
+shift
+cov=$1
+shift
+fai=$1
+shift
+in=$1
+shift
+out=$1
+shift
+win=$1
+shift
+step=$1
+shift
+project=$1
+shift
+
+if [[ "$1" != "-p" ]]
+then
+	sample=$1
+	shift
+fi
+
+if [[ "$1" == "-p" ]]
+then
+	if [ -z $9 ]; then echo "-p name file (indexes for id, ref, start, end, and strand) stream"; exit -1; fi
+	probe="-p $3 -ref $5 -start $6 -end $7"
+	if [[ "$4" =~ "^[0-9]" ]]; then probe="$probe -name   $4"    ; fi
+	if [[ "$8" =~ "^[0-9]" ]]; then probe="$probe -strand $8"    ; fi
+	if (( "$9" < 0         )); then probe="$probe -up     ${9#-}"; fi
+	if (( "$9" > 0         )); then probe="$probe -down   $9"    ; fi
+	type=$2
+else
+	type=win
+fi
+
+base=`dirname $0`
+tmpDir=${TMPDIR-/tmp}
+tmpPre="$tmpDir/$$.$type"
+if [ ! -e "$tmpDir" ]; then mkdir $tmpDir || exit $?; fi
+
+if [ ! -z "$rrbs" ]
+then
+	args="-e -f $rrbs"
+fi
+
+if [ -z $sample ]
+then
+	for f in $in/*.$mode.bed.gz
+	do bedfiles="$bedfiles $f"
+	done
+else
+	for f in `grep -v '^#' $sample | cut -f 3 | sort | uniq`
+	do bedfiles="$bedfiles `ls $in/*.$mode.bed.gz | grep "\\<$f\\>"`"
+	done
+fi
+echo FILES: $bedfiles
+
+for f in $bedfiles
+do
+	g=`basename $f`
+	$base/bed_filter.pl $args -c $cov $f -q | $base/bed2block.pl -q $probe -w $win -s $step -o $tmpPre.${g/bed.gz/$ext} || exit $?
+	(( ${PIPESTATUS[0]} ==  0 )) || exit $?
+	files="$files $tmpPre.${g/bed.gz/$ext}"
+done
+#echo FILES: $files
+
+if [ ! -e $out ]; then mkdir $out; fi
+
+if [[ "$probe" == "" ]]
+then
+	$base/join.pl -m NA -fai $fai -f 1,2,3 -v 4,7,8 -o $out/$project.$mode$type.methy.gz $files || exit $?
+	$base/join.pl -m NA -fai $fai -f 1,2,3 -v 4,5,6 -o $out/$project.$mode$type.nread.gz $files || exit $?
+else
+	$base/join.pl -m NA -fai $fai -f 1,2,3,9 -v 4,7,8 -o $out/$project.$mode$type.methy.gz $files || exit $?
+	$base/join.pl -m NA -fai $fai -f 1,2,3,9 -v 4,5,6 -o $out/$project.$mode$type.nread.gz $files || exit $?
+fi
+
+rm $files

@@ -1,0 +1,46 @@
+#!/bin/bash
+
+if [ -z $3 ]
+then
+	echo ref fq_file error [arguments]
+	exit -1
+fi
+
+ref=$1
+shift
+in=$1
+shift
+error=$1
+shift
+
+
+#if file $in | grep -i gzip >& /dev/null
+#then
+#	temp=${in/.gz/}
+#	zcat $in > $temp || exit $?
+#	in=$temp
+#fi
+
+#if [[ `ulimit -v` == "unlimited" ]]
+#then
+#	MEM=4
+#else
+#	MEM=$(echo $(ulimit -v)/1024/1024 | bc)
+#fi
+
+echo Start: `date` 1>&2
+echo Mem: $MEM 1>&2
+
+#soap $@ -v $error -D $ref -a $in -o /dev/stdout | soap2sam.pl || exit $?
+${PROGRAM_DIR2:+$PROGRAM_DIR2/}/soap $@ -v $error -D $ref -a $in -o /dev/stdout | soap2sam.pl || exit $?
+(( ${PIPESTATUS[0]} ==  0 )) || exit $?
+
+#sortSam.pl -m $MEM -t $in.$$ -r $in -b $in.$$.sam.gz || exit $?
+
+echo End: `date` 1>&2
+
+#if [ ! -z "$temp" ]
+#then
+#	rm $temp $in.$$.sam.gz
+#fi
+

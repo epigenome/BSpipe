@@ -1,0 +1,47 @@
+#!/bin/bash
+
+if [ -z $4 ]
+then
+	echo min_cov out_dir db bed_file_1 ..
+	exit -1
+fi
+
+cov=$1
+shift
+
+out=$1
+shift
+
+db=$1
+shift
+
+export PATH=`dirname $0`:$PATH
+
+catx()
+{
+	local in=$1
+
+	if file -L "$in" 2>/dev/null | grep gzip >& /dev/null
+	then
+		zcat $in
+	else
+		cat $in
+	fi
+}
+
+for f in $@
+do
+	g=`basename $f`
+	g=${g/.gz/}
+	g=${g/.bed/}
+#	g=${g/.clean/}
+#	g=${g/.best/}
+#	g=${g/.chr./.}
+#	g=${g/_sequence/}
+#	g=${g/.txt/}
+	h=`echo $g | sed 's/\..\+$//'`
+
+#	catx $f | bedSort /dev/stdin /dev/stdout | colorItemBed.pl -o $out/$g.bed.ucsc.gz -t "visibility=dense db=$db type=bed name=\"$h bed\" description=\"$h\""
+	catx $f | perl -ane "print if \$F[3] eq '.' || \$F[3] >= $cov" | colorItemBed.pl -q -o $out/$g.ucsc.bed.gz -t "visibility=dense db=$db type=bed name=\"$h bed\" description=\"$h\"" || exit $?
+done
+

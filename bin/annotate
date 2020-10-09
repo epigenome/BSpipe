@@ -1,0 +1,182 @@
+#!/bin/bash
+
+USAGE="Usage: -d db_dir -c db_conf -i input_bed [-o out_dir] [-a] [-l stream_length] [-f score_column] [-s] [-p priority_str]"
+USAGE2="      prority is a combination of U(upstream), 5(5'UTR), E(exon), I(intron), 3(3'UTR), and D(downstream)"
+USAGE3="      -a : output all columns in the input file"
+USAGE4="      -f : compute gene-wise score using the specified field in the input file"
+USAGE5="      -s : summarize feature categories based on feature score"
+
+while getopts i:o:d:c:al:sm:p:f: option
+do
+case "${option}"
+in	
+	i) inFile=$OPTARG;;
+	o) outDir=$OPTARG;;
+	d) dbDir=$OPTARG;;
+	c) dbConf=$OPTARG;;
+	a) all=-all;; 
+	l) updown=$OPTARG;;
+	s) score=-score;;
+	p) prior="$OPTARG";;
+	f) field="-s $OPTARG";;
+esac
+done
+
+shift $((OPTIND-1))
+
+if [ -z $outDir ]; then outDir=.; fi
+if [ -z $prior ]; then prior="U53DEI"; fi
+if [ ! -z $dbConf ] && [ -z $dbDir  ]; then dbDir=`dirname $dbConf`; fi
+
+if [ -z "$inFile" ] || [ -z "$outDir" ] || [ -z "$dbConf" ]
+then
+	echo "$USAGE"
+	echo "$USAGE2"
+	echo "$USAGE3"
+	echo "$USAGE4"
+	echo "$USAGE5"
+	exit -1
+fi
+
+export PATH=`dirname $0`:$PATH
+
+tmpFile=/tmp/temp.$$
+binSize=10
+outPre=${inFile/.gz/}
+outPre=$outDir/`basename $outPre`
+
+
+if [ ! -e "$outDir" ]; then mkdir $outDir; fi
+
+clean_bed.pl $all $inFile $tmpFile
+if (( `cat $tmpFile | wc -l` <= 1 ))
+then
+	rm $tmpFile
+	exit
+fi
+
+index=`perl -ne '@a=split(/\t/); print @a+1; exit;' $tmpFile`
+
+iFile=0
+iName=$((iFile+1))
+iIsGene=$((iName+1))
+iID=$((iIsGene+1))
+iSymbol=$((iID+1))
+iUniq=$((iSymbol+1))
+iUse=$((iUniq+1))
+iChrom=$((iUse+1))
+iStart=$((iChrom+1))
+iEnd=$((iStart+1))
+iStrand=$((iEnd+1))
+iUp=$((iStrand+1))
+iDown=$((iUp+1))
+iInfo=$((iDown+1))
+iExonStart=$((iInfo+1))
+iExonEnd=$((iExonStart+1))
+iCDSStart=$((iExonEnd+1))
+iCDSEnd=$((iCDSStart+1))
+iParameter=$((iCDSEnd+1))
+
+grep -v '^#' $dbConf | while read line
+do
+	buf=($line)
+
+	args="-n ${buf[$iName]} -ref ${buf[$iChrom]} -id ${buf[$iID]} -start ${buf[$iStart]} -end ${buf[$iEnd]}"
+
+	if (( ${#buf[@]} > $iStrand )); then
+		if [[ ${buf[$iStrand]} != '.' ]]; then
+			args="$args -dir ${buf[$iStrand]}"
+		fi
+
+		if (( ${#buf[@]} > $iExonStart )) && [[ "${buf[$iExonStart]}" != "." ]]; then
+			args="$args -es ${buf[$iExonStart]} -ee ${buf[$iExonEnd]} -cs ${buf[$iCDSStart]} -ce ${buf[$iCDSEnd]}"
+			prg=addNearestStrandedNeighbor.pl
+			typ=1
+		else
+			prg=addNearestNeighbor.pl
+			typ=2
+		fi
+	else
+		prg=addNearestNeighbor.pl
+		typ=2
+	fi
+
+	if [ -z $updown ]; then
+			upstream=${buf[$iUp]}
+			downstream=${buf[$iDown]}
+			if (( $upstream > $downstream )); then stream=$upstream; else stream=$downstream; fi
+	else
+			upstream=$updown
+			downstream=$updown
+			stream=$updown
+	fi
+
+	if (( ${#buf[@]} > $iInfo )) && [[ ${buf[$iInfo]} != '.' ]]; then
+			args="$args -info ${buf[$iInfo]}"
+	fi
+
+	if [[ ${buf[$iIsGene]} != "F" ]] || [[ ${buf[$iIsGene]} == "T" ]]; then
+		args="$args -allow $stream"
+	fi
+
+	if [[ ${buf[$iUniq]} != "F" ]] || [[ ${buf[$iUniq]} == "T" ]]; then
+		args="$args -u"
+	fi
+
+	itmFile=$tmpFile.${buf[$iName]}
+	outFile=$outPre.${buf[$iName]}
+	$prg $args -head -f $dbDir/${buf[$iFile]} -i $tmpFile -o $itmFile || exit $?
+
+	if (( $typ == 1 )); then
+		geneClass.pl -q -b $index -c $((index+1)) -f   $index     -up5 $upstream -down5 0 -up3 $downstream -down3 0 -p $prior $itmFile   $itmFile.1 -g $itmFile.3 || exit $?
+		geneClass.pl -q -b $index -c $((index+3)) -f $((index+1)) -up5 $upstream -down5 0 -up3 $downstream -down3 0 -p $prior $itmFile.1 $itmFile.2 -g $itmFile.4 || exit $?
+		combineGeneClass.pl -q $flag -f $((index+3)) -g $((index+5)) $score -bin $binSize -p $prior $itmFile.2 $itmFile.5 || exit $?
+
+		if [[ "${buf[$iUse]}" == "T" ]]; then
+			hugoid.pl -f ${buf[$iID]} -va ${buf[$iSymbol]} -remain -add -hugo $dbDir/${buf[$iFile]} -c $((index+2)),$((index+4)) $itmFile.5 -q | cut -f 1-$((index-1)),$((index+2))- > $outFile.ann || exit $?
+			cp $itmFile.5.stat $outFile.ann.stat
+			head -1 $itmFile.3 > $itmFile.6
+			grep -hv '^#' $itmFile.3 $itmFile.4 | sort -k 1,1 -k 2,2n -k 3,3n >> $itmFile.6
+			hugoid.pl -q -f ${buf[$iID]} -va ${buf[$iSymbol]} -hugo $dbDir/${buf[$iFile]} -a -c 5 $itmFile.6 $itmFile.7 || exit $?
+		else
+		if [[ "${buf[$iUse]}" != "F" ]]; then
+			si=${buf[$iUse]%:*}
+			di=${buf[$iUse]#*:}
+			hugoid.pl -f $si -va $di -remain -add -hugo $dbDir/${buf[$iSymbol]} -c $((index+2)),$((index+4)) $itmFile.5 -q | cut -f 1-$((index-1)),$((index+2))- > $outFile.ann || exit $?
+			cp $itmFile.5.stat $outFile.ann.stat
+			head -1 $itmFile.3 > $itmFile.6
+			grep -hv '^#' $itmFile.3 $itmFile.4 | sort -k 1,1 -k 2,2n -k 3,3n >> $itmFile.6
+			hugoid.pl -q -f $si -va $di -hugo $dbDir/${buf[$iSymbol]} -a -c 5 $itmFile.6 $itmFile.7 || exit $?
+		else
+			hugoid.pl -f ${buf[$iID]} -va ${buf[$iID]} -remain -add -hugo $dbDir/${buf[$iFile]} -c $((index+2)),$((index+4)) $itmFile.5 -q | cut -f 1-$((index-1)),$((index+2))- > $outFile.ann || exit $?
+			cp $itmFile.5.stat $outFile.ann.stat
+			head -1 $itmFile.3 > $itmFile.6
+			grep -hv '^#' $itmFile.3 $itmFile.4 | sort -k 1,1 -k 2,2n -k 3,3n >> $itmFile.6
+			hugoid.pl -q -f ${buf[$iID]} -va ${buf[$iID]} -hugo $dbDir/${buf[$iFile]} -a -c 5 $itmFile.6 $itmFile.7 || exit $?
+		fi
+		fi
+
+		pickBestGene.pl -p $prior $itmFile.7 $outFile.tss -sum $outFile.summary || exit $?
+		if [ ! -z "$field" ]; then geneList.pl $field $outFile.ann $outFile.list || exit $?; fi
+	else
+		featureClass.pl $score ${buf[@]:$iParameter} -bin $binSize -f $index -up5 $upstream -down5 0 -up3 $downstream -down3 0 -i $itmFile -o $outFile.ann -sum $outFile.summary || exit $?
+	fi
+
+done
+
+if (( $? != 0 ))
+then
+	exit $? # because while loop is in a pipe
+fi
+
+#featureStat.pl -f $index $outFile $outFile.stat || exit $?
+##joinClass.pl -col $index -ucsc $inFile.ucscgene.ann -ref $inFile.refgene.ann -cgi $inFile.cgi.ann -rmsk $inFile.rmsk.ann -snp $inFile.snp.ann -o $inFile.ann
+#joinClass.pl -col $index -ucsc $inFile.ucscgene.ann -ref $inFile.refgene.ann -cgi $inFile.cgi.ann -rmsk $inFile.rmsk.ann -o $inFile.ann || exit $?
+rm $tmpFile*
+
+table4figure.pl -i $outPre -o $outPre.table || exit $?
+
+figure4ann.r $outPre.table || exit $?
+
+echo Done
+echo

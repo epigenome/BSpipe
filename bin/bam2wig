@@ -1,0 +1,45 @@
+#!/bin/bash
+
+if [ -z $3 ]
+then
+	echo "out_dir bam_file ref_seq_file [ref_length_file|-]"
+	exit -1
+fi
+
+in=$2
+out=`basename $in`
+out=$1/${out/.bam/}
+ref=$3
+len=$4
+if [ ! -z "$len" ] && [ ! -e "$len" ]
+then
+	len=$ref.length
+fi
+
+#tmp=${TMPDIR-/tmp}/bam2wig.$$.pileup.gz
+tmp=${TMPDIR-/tmp}/bam2wig.$$
+
+export PATH=`dirname $0`:$PATH
+
+if [ ! -z "$len" ] && [[ `which genomeCoverageBed` != "" ]]
+then
+
+#genomeCoverageBed -bg -ibam $in -g $len | wigToBigWig -clip /dev/stdin $len $out.bigwig || exit $?
+genomeCoverageBed -bg -ibam $in -g $len > $tmp || exit $?
+bedGraphToBigWig $tmp $len $out.bigwig || exit $?
+
+else
+
+samtools mpileup -m 0x604 -M 0 -BQ 0 -d 10000000 -f $ref $in | 
+if [ -z $len ]
+then
+	pileup2wiggle.pl -q -o $out.wig || exit $?
+else
+#	pileup2wiggle.pl $tmp -q -not | wigToBigWig -clip /dev/stdin $len $out.bigwig || exit $?
+	pileup2wiggle.pl -q -not -o $tmp || exit $?
+	bedGraphToBigWig $tmp $len $out.bigwig || exit $?
+fi
+
+fi
+
+rm $tmp

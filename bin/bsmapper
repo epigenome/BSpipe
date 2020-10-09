@@ -1,0 +1,216 @@
+#!/bin/bash
+
+if [[ "$1" == "-leave" ]]
+then
+	leave=1
+	shift
+fi
+
+if [ -z ${14} ]
+then
+	echo "<-1|-2|-> conf_file org_ref tc_ref ag_ref tc_index ag_index sequence_file qual_type out_dir min_mapping_qual err soft occ cov min_base_qual bases fix"
+	exit -1
+fi
+
+mode=$1
+shift
+conf=$1
+shift
+ref=$1
+shift
+refc=$1
+shift
+refg=$1
+shift
+dbc=$1
+shift
+dbg=$1
+shift
+seq=$1
+shift
+qual=$1
+shift
+out=$1
+shift
+mq=$1
+shift
+err=$1
+shift
+soft=$1
+shift
+occ=$1
+shift
+cov=$1
+shift
+bq=$1
+shift
+bases=$1
+shift
+fix=$1
+shift
+
+bs=`basename $seq`
+bs=${bs%.gz}
+bs=${bs%.fastq}
+bs=${bs%.fq}
+bs=${bs%_sequence.txt}
+
+tmpDir=${TMPDIR-/tmp}
+tmpbs="$tmpDir/$bs"
+
+if [ -d "$out" ]
+then
+	outbs="$out/$bs"
+else
+	outbs="$out"
+fi
+
+log=$outbs.bsmapper.log
+
+# retain multiply mapped reads
+if (( "$occ" > 1 ))
+then
+	multiarg=-nomulti # do not filter multiply mapped reads
+fi
+
+export PATH=`dirname $0`:$PATH
+
+if [ ! -e "$tmpDir" ]; then mkdir $tmpDir || exit $?; fi
+
+check_pipe()
+{
+	local status=($@)
+	for (( i=0; i<${#status[@]}; i++ ))
+	do
+		if (( ${status[$i]} != 0 ))
+		then
+			echo Exit code of command $i = ${status[$i]}
+			exit ${status[$i]}
+		fi
+	done
+}
+
+run()
+{
+	local _strand=$1
+	local _ref=$2
+	local _seq=$3
+	local _out=$4
+	local _temp=
+	local MEM=
+	local RUN="$MAPPING"
+
+	RUN=${RUN//PROGRAM/${PROGRAM_DIR:+$PROGRAM_DIR/}$PROGRAM}
+	RUN=${RUN//STRAND/$_strand}
+	RUN=${RUN//QUALTYPE/$qual}
+	RUN=${RUN//PHRED64/$PHRED64}
+	RUN=${RUN//PHRED33/$PHRED33}
+	RUN=${RUN//REF/$_ref}
+	RUN=${RUN//SEQ/$_seq}
+	if (( $occ > 1 ))
+	then
+		RUN=${RUN//REPORT/$MULTIPLE}
+		RUN=${RUN//OCCURRENCE/$occ}
+	else
+		RUN=${RUN//REPORT/$UNIQUE}
+	fi
+
+	if [[ "$SORTMAP" == "T" ]]
+	then
+		_temp=${_out/sam.gz/unsorted.sam.gz}
+	else
+		_temp=$_out
+	fi
+
+	echo "$RUN" 2>>$log
+	eval "$RUN 2>>$log | gzip -c > $_temp" || exit $?
+	check_pipe ${PIPESTATUS[@]}
+
+	if [[ "$SORTMAP" == "T" ]]
+	then
+		MEM=`ulimit -v`
+		if [[ "$MEM" == "unlimited" ]]
+		then
+			MEM=4
+		else
+			MEM=`echo $MEM/1024/1024 | bc`
+		fi
+		echo sortSam.pl -m $MEM -d $_out.$$ -r $_seq -b $_temp -o $_out >>$log
+		sortSam.pl -m $MEM -d $_out.$$ -r $_seq -b $_temp -o $_out || exit $?
+		rm -r $_temp $out.$$ >&/dev/null
+	fi
+}
+
+. $conf || exit -1
+
+if [ "$mode" == "-1" ] || [ "$mode" == "-a" ]
+then
+	echo '==Read 1=====' >>$log
+	echo [`date`] Converting sequence file .. >>$log
+	fq_bisulfite.pl $seq $tmpbs.c.fq -m c 1>>$log 2>&1 || exit $?
+
+	echo [`date`] Mapping to Watson strand .. >>$log
+	run "$WATSON" $dbc $tmpbs.c.fq $tmpbs.cc.sam.gz
+	echo [`date`] Mapping to Creek strand .. >>$log
+	run "$CRICK"  $dbg $tmpbs.c.fq $tmpbs.gc.sam.gz
+fi
+
+if [ "$mode" == "-2" ] || [ "$mode" == "-a" ]
+then
+	echo '==Read 2=====' >>$log
+	echo [`date`] Converting sequence file .. >>$log
+	fq_bisulfite.pl $seq $tmpbs.g.fq -m g 1>>$log 2>&1 || exit $?
+	echo [`date`] Mapping to Watson strand .. >>$log
+	run "$WATSON" $dbg $tmpbs.g.fq $tmpbs.gg.sam.gz
+	echo [`date`] Mapping to Creek strand .. >>$log
+	run "$CRICK"  $dbc $tmpbs.g.fq $tmpbs.cg.sam.gz
+fi
+
+echo [`date`] Computing best mapping .. >>$log
+best_sam.pl -r $ref -s $seq -o $tmpbs.best.sam.gz $tmpbs.[cg][cg].sam.gz 1>>$log 2>&1 || exit $?
+
+if [ ! -z $fix ]
+then
+	echo [`date`] Fixing RRBS restriction sites .. >>$log
+	fixFilledBase.pl -q -l $tmpbs.best.fix.log -f $fix -s $ref $tmpbs.best.sam.gz $tmpbs.best.sam.fix.gz 1>>$log 2>&1 || exit $?
+	mv $tmpbs.best.sam.gz $tmpbs.best.sam.nofix.gz || exit $?
+	mv $tmpbs.best.sam.fix.gz $tmpbs.best.sam.gz || exit $?
+fi
+
+echo [`date`] Summarizing mapping .. >>$log
+sam_summary.pl -fq $seq -o $outbs.best.bam.all.summary -s $tmpbs.best.sam.gz 1>>$log 2>&1
+
+#echo [`date`] Comput best mapping .. >>$log
+#merge_sams $ref $bs.best $tmpbs.best.sam.gz 1>>$log 2>&1 || exit $?
+
+#echo [`date`] Measuing DNA methylation .. >>$log
+#samtools view -h $bs.best.bam | msam2gff.pl -seq $ref -sam /dev/stdin -o $bs.best.cn.gff.gz -n $bases 1>>$log 2>&1 || exit $?
+
+echo [`date`] Filtering mapped reads .. >>$log
+if [ ! -e "$ref.fai" ]; then samtools faidx $ref; fi
+sam_filter.pl -e $err -soft $soft $multiarg -mq $mq -f $ref.fai -i $tmpbs.best.sam.gz -si -o $outbs.best.bam 1>>$log 2>&1 || exit $?
+#zcat $tmpbs.best.sam.gz | samtools view -bhS - | samtools sort - $outbs.best 1>>$log 2>&1
+#samtools index $outbs.best.bam - 1>>$log 2>&1
+
+echo [`date`] Summarizing filtered mapping .. >>$log
+sam_summary.pl -sum $outbs.best.bam.all.summary -o $outbs.best.bam.summary $outbs.best.bam 1>>$log 2>&1
+
+#echo [`date`] Measuing DNA methylation .. >>$log
+#samtools view -h $outbs.best.bam 2>>$log | msam2gff.pl -seq $ref -sam /dev/stdin -o $outbs.best.cn.gff.gz -n $bases 1>>$log 2>&1 || exit $?
+
+#echo [`date`] Measuing CpG methylation .. >>$log
+#mgff2bed.pl -m $cov -i $outbs.best.cn.gff.gz -o $outbs.best.gzip 1>>$log 2>&1 || exit $?
+
+echo [`date`] Measuing DNA methylation .. >>$log
+samtools view -h $outbs.best.bam 2>>$log | msam2gff.pl -mq $bq -seq $ref -sam /dev/stdin -n $bases 2>>$log | mgff2bed.pl -q -m $cov -o $outbs.best -gzip 1>>$log 2>&1
+check_pipe ${PIPESTATUS[@]}
+
+if [ -z "$leave" ]
+then
+	rm $tmpbs.?.fq $tmpbs.*sam.gz
+else
+	cp $tmpbs.?.fq $tmpbs.*sam.gz `dirname $outbs`
+fi
+
+echo [`date`] Done >>$log
+

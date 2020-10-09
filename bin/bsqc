@@ -1,0 +1,46 @@
+#!/bin/bash
+
+if [[ "$1" == "-redraw" ]]
+then
+	redraw=1
+	shift
+fi
+
+if [ -z $5 ]
+then
+	echo "[-redraw] <-r ref_file | -f fai_file> base_qual mapping_qual in_file out_file [option]"
+	exit -1
+fi
+
+flag=$1
+shift
+ref=$1
+shift
+bq=$1
+shift
+mq=$1
+shift
+in=$1
+shift
+out=$1
+shift
+bin=`basename $in`
+bin=${bin%.bam}
+base=`dirname $0`
+
+if [ -z "$out" ]
+then
+	out=`dirname $in`
+fi
+
+if [ -d "$out" ]
+then
+	out="$out/$bin"
+fi
+
+out=${out%.qc}.qc
+
+if [ -z "$redraw" ]; then $base/bsqc.pl -bq $bq -mq $mq $flag $ref $in $out || exit $?; fi
+
+Rscript $base/bsqc.r $out $out -t $(echo $(basename $out) | perl -ne 'print $1 if /^([^\.]+)+/') $@ || exit $?
+
